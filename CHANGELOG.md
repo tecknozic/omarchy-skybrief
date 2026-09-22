@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2 — 2026-09-22
+
+- Decoded reports are rendered as plain text unconditionally. `AutoText` on the
+  decoded observation would have interpreted markup-shaped text as Qt rich text
+  (including resource-bearing tags), and the decoded string is built from the
+  remote response. Raised in the marketplace review.
+- Cloud cover codes are validated against the known set instead of being carried
+  through as-is, both when parsing the API response and when decoding it. An
+  unknown `cover` value is now dropped rather than echoed, so endpoint-controlled
+  text can no longer reach the display layer at all.
+
 ## 0.3.1 — 2026-09-22
 
 - Enforce the response size cap while the body is being received, not after it

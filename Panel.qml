@@ -492,10 +492,15 @@ Panel {
             }
           }
 
+          // PlainText unconditionally: the decoded reading is built from the
+          // remote report, so markup-shaped text arriving in a station name or
+          // a cloud token must be displayed literally rather than interpreted
+          // as rich text. AutoText here was the one sink in the plugin that
+          // could turn endpoint-controlled bytes into formatting.
           Text {
             visible: root.report !== null
             width: parent.width
-            textFormat: root.showRaw ? Text.PlainText : Text.AutoText
+            textFormat: Text.PlainText
             wrapMode: Text.Wrap
             text: root.report
               ? (root.showRaw ? root.report.raw : Model.decodeMetar(root.report, root.units))

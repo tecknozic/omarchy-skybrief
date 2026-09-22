@@ -199,6 +199,41 @@ test("weather tokens never pick up wind, cloud or QNH groups", function () {
   )
 })
 
+test("an unknown cloud cover never reaches the decoded reading", function () {
+  // The API response is remote input. A cover value outside the known codes is
+  // dropped rather than echoed: echoing it put endpoint-controlled text into
+  // the one Text item that used to interpret markup.
+  assert.equal(Model.isKnownCoverCode("OVC"), true)
+  assert.equal(Model.isKnownCoverCode("bkn"), true)
+  assert.equal(Model.isKnownCoverCode("NSC"), true)
+  assert.equal(Model.isKnownCoverCode("<b>OVC</b>"), false)
+  assert.equal(Model.isKnownCoverCode("<img src=x>"), false)
+  assert.equal(Model.isKnownCoverCode(""), false)
+  assert.equal(Model.isKnownCoverCode(null), false)
+
+  var parsed = Model.parseMetar({
+    icaoId: "LFRN", obsTime: 1790087400,
+    rawOb: "METAR LFRN 221430Z 05006KT CAVOK 27/06 Q1026",
+    clouds: [
+      { cover: "OVC", base: 200 },
+      { cover: "<b>BKN</b>", base: 900 },
+      { cover: "<img src=\"http://evil/x\">", base: 100 }
+    ]
+  })
+  // Only the known layer survives, so the decoded text is ours, not theirs.
+  assert.equal(parsed.clouds.length, 1)
+  assert.equal(parsed.clouds[0].cover, "OVC")
+
+  var text = Model.decodeMetar(parsed)
+  assert.ok(text.indexOf("<") === -1, "decoded text must contain no markup: " + text)
+  assert.ok(text.indexOf("overcast") !== -1)
+
+  // A cover code that is known but has no word still decodes to itself, rather
+  // than to nothing: these are real codes, not garbage.
+  var ncd = Model.decodeMetar({ clouds: [{ cover: "NCD", baseFt: null }], raw: "" })
+  assert.ok(ncd.indexOf("no cloud detected") !== -1, ncd)
+})
+
 test("decodeMetar produces a sentence with the observed conditions", function () {
   var parsed = Model.parseMetar({
     icaoId: "EGGD",

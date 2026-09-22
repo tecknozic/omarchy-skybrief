@@ -236,14 +236,32 @@ function parseWindFromRaw(rawOb) {
   return wind
 }
 
+// Cloud cover codes the decoder knows. A value outside this set never reaches
+// the display layer: the API response is remote input, and an unknown or
+// markup-shaped `cover` has no meaning to show.
+var KNOWN_COVER_CODES = {
+  FEW: true, SCT: true, BKN: true, OVC: true, VV: true,
+  NSC: true, SKC: true, CLR: true, NCD: true,
+  // Codes the API is documented to emit for an automatic or missing report.
+  NIL: true, CAVOK: true, NOSIG: true
+}
+
+function isKnownCoverCode(cover) {
+  var key = String(cover === null || cover === undefined ? "" : cover).trim().toUpperCase()
+  return KNOWN_COVER_CODES[key] === true
+}
+
 function parseCloudsFromJson(clouds) {
   var out = []
   if (!Array.isArray(clouds)) return out
   for (var i = 0; i < clouds.length; i++) {
     var c = clouds[i]
     if (!c || typeof c !== "object") continue
-    var cover = String(c.cover === null || c.cover === undefined ? "" : c.cover).toUpperCase()
-    if (!cover) continue
+    var cover = String(c.cover === null || c.cover === undefined ? "" : c.cover).trim().toUpperCase()
+    // An unrecognised cover is dropped rather than passed through: it would
+    // otherwise be spelled out verbatim in the decoded reading, which is the
+    // path that once carried endpoint-controlled text into the UI.
+    if (!isKnownCoverCode(cover)) continue
     var base = numberOrNull(c.base)
     if (base === null) base = numberOrNull(c.baseFt)
     out.push({ cover: cover, baseFt: base })
@@ -510,8 +528,12 @@ function decodeWeatherToken(token) {
   return words.length ? words.join(" ") : text
 }
 
+// The word for a cover code, or an empty string when the code is not one we
+// know. Returning the input verbatim — as this once did — passed remote text
+// straight through to the display.
 function decodeCover(cover) {
-  var key = String(cover === null || cover === undefined ? "" : cover).toUpperCase()
+  var key = String(cover === null || cover === undefined ? "" : cover).trim().toUpperCase()
+  if (!isKnownCoverCode(key)) return ""
   return COVER_WORDS[key] || key
 }
 
@@ -521,9 +543,11 @@ function decodeClouds(clouds) {
   for (var i = 0; i < clouds.length; i++) {
     var c = clouds[i]
     if (!c) continue
+    var word = decodeCover(c.cover)
+    if (word === "") continue
     var base = numberOrNull(c.baseFt)
-    if (base === null) parts.push(decodeCover(c.cover))
-    else parts.push(decodeCover(c.cover) + " at " + Math.round(base) + " ft")
+    if (base === null) parts.push(word)
+    else parts.push(word + " at " + Math.round(base) + " ft")
   }
   return parts.join(", ")
 }
@@ -1218,6 +1242,7 @@ if (typeof module !== "undefined") {
     normalizePlaceName: normalizePlaceName,
     matchStationsByName: matchStationsByName,
     crosswindComponents: crosswindComponents,
-    isUnknownStation: isUnknownStation
+    isUnknownStation: isUnknownStation,
+    isKnownCoverCode: isKnownCoverCode
   }
 }

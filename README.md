@@ -162,6 +162,11 @@ rm -f ~/.local/state/omarchy/skybrief/autorouter.json
 - The URL is passed to the shell as a positional argument and preceded by `--`,
   never interpolated into the command string, so it cannot be read as a flag or
   a shell word.
+- No text built from a remote response is rendered as rich text. Every `Text`
+  in the plugin sets `Text.PlainText` explicitly — the decoded METAR included,
+  which had been left on `AutoText` — and cloud cover codes are validated
+  against the known set, so endpoint-controlled bytes can neither become markup
+  nor reach the display at all.
 - The plugin ships no executable, runs no installer, and never pipes a download
   into a shell. The one shell in use is `/usr/bin/bash -o pipefail -c` with a
   fixed command string, and its only variable parts are positional arguments.

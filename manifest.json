@@ -29,7 +29,7 @@
     },
     "schema": [
       { "key": "station", "type": "string", "label": "Favourite station", "description": "ICAO code. Empty picks the nearest reporting field from the Omarchy weather location.", "defaultValue": "" },
-      { "key": "quickStations", "type": "string", "label": "Quick list", "description": "Comma-separated ICAO codes offered in the panel.", "defaultValue": "" },
+      { "key": "quickStations", "type": "string", "label": "Quick list", "description": "Comma-separated ICAO codes offered in the panel. Ten at most; extra codes are ignored.", "defaultValue": "" },
       { "key": "fir", "type": "string", "label": "Favourite FIR", "description": "FIR identifier (e.g. LFFF) whose NOTAMs are shown alongside the aerodrome's.", "defaultValue": "" },
       { "key": "showRaw", "type": "boolean", "label": "Show raw reports by default", "defaultValue": true },
       { "key": "units", "type": "enum", "label": "Units", "options": ["metric", "imperial"], "defaultValue": "metric", "description": "Applies to temperature, visibility and altimeter only. Wind stays in knots, cloud base in feet." },

@@ -42,6 +42,9 @@ Panel {
   property string credentialUser: ""
   property string credentialPassword: ""
   property string copyNote: ""
+  // A one-line answer to the last list action: the personal list being full is
+  // a state the user cannot see from the rows themselves.
+  property string listNote: ""
   property string expandedNotam: ""
 
   readonly property string station: root.service ? String(root.service.favouriteStation || "") : ""
@@ -84,18 +87,28 @@ Panel {
 
   function open() {
     root.expanded = false
+    resetSearch()
     root.controller.show()
     refresh()
   }
 
   function openFromHotkey() {
+    resetSearch()
     root.controller.show()
     refresh()
+  }
+
+  // The field and its note describe one attempt at typing a code, which ends
+  // when the panel does.
+  function resetSearch() {
+    root.listNote = ""
+    if (searchField) searchField.text = ""
   }
 
   function close() {
     root.copyNote = ""
     root.expandedNotam = ""
+    resetSearch()
     root.controller.hide()
   }
 
@@ -122,19 +135,45 @@ Panel {
     writeSettings(changes)
   }
 
+  // One entry point for the field and the add button. A code that is a valid
+  // station is both listed and made the favourite; anything else stays in the
+  // field with the reason, so a typo can be corrected instead of retyped.
+  function submitStation(raw) {
+    var icao = String(raw === null || raw === undefined ? "" : raw).trim().toUpperCase()
+    if (!/^[A-Z0-9]{4}$/.test(icao)) {
+      root.listNote = "That is not a four-character ICAO code."
+      return
+    }
+    if (!root.addToQuickList(icao)) return
+    root.chooseStation(icao)
+    searchField.text = ""
+  }
+
   function chooseStation(code) {
     var icao = String(code || "").trim().toUpperCase()
     if (!/^[A-Z0-9]{4}$/.test(icao)) return
+    root.listNote = ""
     writeSetting("station", icao)
     refresh()
   }
 
   function addToQuickList(code) {
-    var icao = String(code || "").trim().toUpperCase()
-    if (!/^[A-Z0-9]{4}$/.test(icao)) return
-    var list = Model.parseStationList(root.settings ? root.settings.quickStations : "")
-    if (list.indexOf(icao) === -1) list.push(icao)
-    writeSetting("quickStations", list.join(","))
+    var result = Model.addQuickStation(root.settings ? root.settings.quickStations : "", code)
+    if (result.added) {
+      root.listNote = ""
+      writeSettings({ quickStations: result.stations.join(",") })
+      return true
+    }
+    // A full list and an already-listed code are different problems, so they
+    // get different sentences; neither leaves the user wondering why nothing
+    // happened.
+    if (result.reason === "full")
+      root.listNote = "Quick list is full (" + Model.MAX_QUICK_STATIONS + " stations) — remove one with the bin."
+    else if (result.reason === "duplicate")
+      return true
+    else
+      root.listNote = "That is not a four-character ICAO code."
+    return false
   }
 
   // Removing the station that is currently the favourite would leave the widget
@@ -142,13 +181,14 @@ Panel {
   // same write and falls back to the nearest reporting field.
   function removeFromQuickList(code) {
     var icao = String(code || "").trim().toUpperCase()
-    var list = Model.parseStationList(root.settings ? root.settings.quickStations : "")
-    var next = []
-    for (var i = 0; i < list.length; i++) if (list[i] !== icao) next.push(list[i])
+    var next = Model.removeQuickStation(root.settings ? root.settings.quickStations : "", icao)
 
     var changes = { quickStations: next.join(",") }
     if (String(root.settings ? root.settings.station : "").trim().toUpperCase() === icao)
       changes.station = ""
+    // A note about the list being full stops being true the moment room is
+    // made, and a note that outlives its cause is worse than no note.
+    root.listNote = ""
     writeSettings(changes)
     refresh()
   }
@@ -477,7 +517,8 @@ Panel {
           PanelSeparator { visible: root.quickStations !== ""; width: parent.width }
           PanelSectionHeader {
             visible: root.quickStations !== ""
-            text: "QUICK LIST"
+            text: "QUICK LIST  " + Model.parseStationList(root.quickStations).length
+              + "/" + Model.MAX_QUICK_STATIONS
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -533,11 +574,7 @@ Panel {
               placeholderText: "ICAO code"
               foreground: root.foreground
               font.family: root.fontFamily
-              onAccepted: {
-                root.addToQuickList(text)
-                root.chooseStation(text)
-                text = ""
-              }
+              onAccepted: root.submitStation(text)
             }
 
             PanelActionButton {
@@ -545,12 +582,22 @@ Panel {
               iconText: "󰐕"
               tooltipText: "Add to the quick list and use it"
               foreground: root.foreground
-              onClicked: {
-                root.addToQuickList(searchField.text)
-                root.chooseStation(searchField.text)
-                searchField.text = ""
-              }
+              onClicked: root.submitStation(searchField.text)
             }
+          }
+
+          // The answer to the last list action. Shown next to the field rather
+          // than as a toast, so it cannot be missed while the list is scrolled
+          // and it disappears with the panel.
+          Text {
+            visible: root.listNote !== ""
+            width: parent.width
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            text: root.listNote
+            color: Color.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
           }
 
           // The two failures are distinct and never conflated: a code the API

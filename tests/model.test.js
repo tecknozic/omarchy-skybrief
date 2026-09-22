@@ -12,6 +12,44 @@ test("parseStationList keeps valid ICAO codes only", function () {
   assert.deepEqual(Model.parseStationList("LFPG;LFPO"), [])
 })
 
+test("the personal list is capped at ten, whatever is stored", function () {
+  var eleven = "LFPG,LFPO,LFLL,EGGD,EGLL,LEMD,LIRF,LOWW,LSZH,EHAM,EBBR"
+  var list = Model.parseStationList(eleven)
+  assert.equal(list.length, 10)
+  assert.equal(list[9], "EHAM")
+  assert.ok(list.indexOf("EBBR") === -1)
+  // An explicit limit still wins, for callers that want a shorter answer.
+  assert.equal(Model.parseStationList(eleven, 3).length, 3)
+  assert.deepEqual(Model.parseStationList(eleven, 3), ["LFPG", "LFPO", "LFLL"])
+})
+
+test("addQuickStation reports why it refused rather than doing nothing", function () {
+  var full = "LFPG,LFPO,LFLL,EGGD,EGLL,LEMD,LIRF,LOWW,LSZH,EHAM"
+
+  assert.deepEqual(Model.addQuickStation("LFPG,LFPO", "LFLL"),
+    { stations: ["LFPG", "LFPO", "LFLL"], added: true, reason: "" })
+  // Already listed: the list does not grow a duplicate, and the caller is told
+  // it was a duplicate rather than a full list.
+  assert.deepEqual(Model.addQuickStation("LFPG,LFPO", "lfpo"),
+    { stations: ["LFPG", "LFPO"], added: false, reason: "duplicate" })
+  // Full: the eleventh code is refused, the ten already there are untouched.
+  var refused = Model.addQuickStation(full, "EBBR")
+  assert.equal(refused.added, false)
+  assert.equal(refused.reason, "full")
+  assert.equal(refused.stations.length, 10)
+  // A malformed code never reaches the list.
+  assert.equal(Model.addQuickStation("LFPG", "EB").reason, "invalid")
+  assert.equal(Model.addQuickStation("LFPG", "LFPGX").reason, "invalid")
+  // Lower case is normalised, not refused.
+  assert.equal(Model.addQuickStation("", "lfpg").stations[0], "LFPG")
+})
+
+test("removeQuickStation drops one code and keeps the order", function () {
+  assert.deepEqual(Model.removeQuickStation("LFPG,LFPO,LFLL", "lfpo"), ["LFPG", "LFLL"])
+  assert.deepEqual(Model.removeQuickStation("LFPG,LFPO", "ZZZZ"), ["LFPG", "LFPO"])
+  assert.deepEqual(Model.removeQuickStation("", "LFPG"), [])
+})
+
 test("visibility thresholds sit on the FAA boundaries, both sides", function () {
   // Ceiling: LIFR <500, IFR <1000, MVFR <=3000, VFR above.
   assert.equal(Model.ceilingCategory(499), "LIFR")

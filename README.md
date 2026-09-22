@@ -81,7 +81,7 @@ omarchy bar set io.github.tecknozic.skybrief notamSource autorouter
 | Setting | Default | Meaning |
 |---|---|---|
 | `station` | *(empty)* | Favourite ICAO code. Empty uses the nearest reporting field to the Omarchy weather location. |
-| `quickStations` | *(empty)* | Comma-separated codes offered as one-click rows in the popup. |
+| `quickStations` | *(empty)* | Comma-separated codes offered as one-click rows in the popup, **ten at most**. Extra codes are ignored; the header shows the count. |
 | `fir` | *(empty)* | FIR identifier (`LFFF`, `EDGG`, …) whose NOTAMs and SIGMETs are shown alongside the aerodrome's. |
 | `showRaw` | `true` | Start on the raw report text rather than the decoded reading. |
 | `units` | `metric` | Applies to temperature, visibility and altimeter **only**. Wind stays in knots and cloud base in feet. |

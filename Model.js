@@ -84,18 +84,51 @@ function toMillis(value) {
 // ---------------------------------------------------------------------------
 // Stations
 
+// The personal list is capped: the popup is a glance, and a list long enough to
+// need scrolling stops being one. Every code also rides the one METAR request,
+// so the cap keeps that request bounded too.
+var MAX_QUICK_STATIONS = 10
+
 // Comma / space / newline separated ICAO codes, upper-cased, malformed
 // entries dropped. A 2-letter fragment like "EB" is a mistake, not a station.
-function parseStationList(raw) {
+// `limit` truncates the result; it defaults to the personal-list cap.
+function parseStationList(raw, limit) {
   var text = String(raw === null || raw === undefined ? "" : raw)
   var tokens = text.split(/[\s,]+/)
+  var max = numberOrNull(limit)
+  if (max === null || max <= 0) max = MAX_QUICK_STATIONS
+
   var out = []
   for (var i = 0; i < tokens.length; i++) {
     var code = tokens[i].trim().toUpperCase()
     if (!/^[A-Z0-9]{4}$/.test(code)) continue
     if (out.indexOf(code) !== -1) continue
     out.push(code)
+    if (out.length >= max) break
   }
+  return out
+}
+
+// Append a code to the personal list. Returns the new list plus why it was
+// refused, so the caller can say which of the two cases it hit rather than
+// silently doing nothing — a full list and an already-listed code need
+// different sentences.
+function addQuickStation(raw, code, limit) {
+  var icao = String(code === null || code === undefined ? "" : code).trim().toUpperCase()
+  var stations = parseStationList(raw, limit)
+  if (!/^[A-Z0-9]{4}$/.test(icao)) return { stations: stations, added: false, reason: "invalid" }
+  if (stations.indexOf(icao) !== -1) return { stations: stations, added: false, reason: "duplicate" }
+  if (stations.length >= MAX_QUICK_STATIONS) return { stations: stations, added: false, reason: "full" }
+  stations.push(icao)
+  return { stations: stations, added: true, reason: "" }
+}
+
+// Drop a code. The list comes back in the same order, one shorter.
+function removeQuickStation(raw, code) {
+  var icao = String(code === null || code === undefined ? "" : code).trim().toUpperCase()
+  var list = parseStationList(raw)
+  var out = []
+  for (var i = 0; i < list.length; i++) if (list[i] !== icao) out.push(list[i])
   return out
 }
 
@@ -986,7 +1019,10 @@ if (typeof module !== "undefined") {
   module.exports = {
     METERS_PER_SM: METERS_PER_SM,
     UNLIMITED_METERS: UNLIMITED_METERS,
+    MAX_QUICK_STATIONS: MAX_QUICK_STATIONS,
     parseStationList: parseStationList,
+    addQuickStation: addQuickStation,
+    removeQuickStation: removeQuickStation,
     matchVisibilityToken: matchVisibilityToken,
     parseVisibilityMeters: parseVisibilityMeters,
     parseWindFromRaw: parseWindFromRaw,

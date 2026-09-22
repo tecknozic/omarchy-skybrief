@@ -48,11 +48,26 @@ Item {
     return value === undefined || value === null ? fallback : value
   }
 
+  // `omarchy bar set <id> showRaw true` writes the STRING "true" into
+  // shell.json — the CLI takes a value, not a JSON literal — so a strict
+  // `=== true` would read an enabled setting as off and the switch would
+  // silently refuse to move.
+  function settingBool(name, fallback) {
+    var value = setting(name, fallback)
+    if (typeof value === "string") {
+      var text = value.trim().toLowerCase()
+      if (text === "false" || text === "0" || text === "no" || text === "off" || text === "") return false
+      if (text === "true" || text === "1" || text === "yes" || text === "on") return true
+      return fallback === true
+    }
+    return value === true || Number(value) === 1
+  }
+
   readonly property string configuredStation: String(setting("station", "")).trim().toUpperCase()
   readonly property string configuredFir: String(setting("fir", "")).trim().toUpperCase()
   readonly property string units: String(setting("units", "metric"))
   readonly property string timeFormat: String(setting("timeFormat", "utc"))
-  readonly property bool showRaw: setting("showRaw", true) === true
+  readonly property bool showRaw: settingBool("showRaw", true)
   readonly property int refreshMinutes: Math.max(2, Number(setting("refreshMinutes", 10)) || 10)
   readonly property int maxAgeMinutes: Math.max(15, Number(setting("maxAgeMinutes", 75)) || 75)
   readonly property string alertCategory: String(setting("alertCategory", "off"))

@@ -724,10 +724,16 @@ Panel {
 
             PanelSeparator { width: parent.width }
 
-            // ---- decoded METAR and TAF --------------------------------
+            // ---- METAR and TAF ----------------------------------------
+            //
+            // One version or the other, never both, and never a second switch:
+            // the toggle at the top of the panel is the only control for raw
+            // versus decoded, and the detail view obeys the same choice. Two
+            // switches for one setting would be two places to look to find out
+            // which text you are reading.
 
             PanelSectionHeader {
-              text: "DECODED"
+              text: "METAR"
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -737,12 +743,24 @@ Panel {
               width: parent.width
               textFormat: Text.PlainText
               wrapMode: Text.Wrap
-              text: root.report ? Model.decodeMetar(root.report, root.units) : ""
+              text: root.report
+                ? (root.showRaw ? root.report.raw : Model.decodeMetar(root.report, root.units))
+                : ""
               color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+              font.family: Style.font.family
+              font.pixelSize: root.showRaw ? Style.font.bodySmall : Style.font.body
             }
 
+            PanelSeparator { visible: root.taf !== null; width: parent.width }
+            PanelSectionHeader {
+              visible: root.taf !== null
+              text: "TAF"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            // The raw forecast is one line of coded groups; the decoded one is
+            // the same forecast spelled out period by period.
             Text {
               visible: root.taf !== null
               width: parent.width
@@ -750,7 +768,9 @@ Panel {
               wrapMode: Text.Wrap
               text: {
                 if (!root.taf) return ""
-                var text = "TAF valid " + Model.formatObsTime(root.taf.validTimeFrom, root.timeFormat)
+                if (root.showRaw) return root.taf.raw
+
+                var text = "Valid " + Model.formatObsTime(root.taf.validTimeFrom, root.timeFormat)
                   + " to " + Model.formatObsTime(root.taf.validTimeTo, root.timeFormat) + "."
                 for (var i = 0; i < root.taf.periods.length; i++) {
                   var period = root.taf.periods[i]
@@ -766,41 +786,8 @@ Panel {
                 return text
               }
               color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            // The raw section is collapsible: the decoded text is what a quick
-            // look needs, and the raw text is what a thorough one wants.
-            Toggle {
-              width: parent.width
-              label: "Show raw text"
-              checked: root.showRaw
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.writeSetting("showRaw", !root.showRaw)
-            }
-
-            Text {
-              visible: root.showRaw && root.report !== null
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: root.report ? root.report.raw : ""
-              color: root.dim
-              font.family: Style.font.family
-              font.pixelSize: Style.font.bodySmall
-            }
-
-            Text {
-              visible: root.showRaw && root.taf !== null
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: root.taf ? root.taf.raw : ""
-              color: root.dim
-              font.family: Style.font.family
-              font.pixelSize: Style.font.bodySmall
+              font.family: root.showRaw ? Style.font.family : root.fontFamily
+              font.pixelSize: root.showRaw ? Style.font.bodySmall : Style.font.body
             }
 
             // ---- wind ---------------------------------------------------

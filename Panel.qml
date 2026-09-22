@@ -531,19 +531,78 @@ Panel {
               model: Model.parseStationList(root.quickStations)
 
               Row {
+                id: quickRow
                 required property string modelData
                 width: parent.width
+                height: quickRowSurface.height
                 spacing: Style.space(4)
 
-                Button {
-                  width: Math.max(0, parent.width - parent.spacing - trash.width)
-                  leftAlign: true
-                  bordered: false
+                // The category letter used to sit on the left as a glyph; it
+                // was saying what the category word says again, one column
+                // later. A Button cannot carry three columns — its content is
+                // fixed to an icon and one label — so the row is the kit's
+                // cursor surface with the same hover chrome and its own click.
+                CursorSurface {
+                  id: quickRowSurface
+                  property bool hovered: false
+                  readonly property var hoverSpec: Border.controlSpec("hover-cursor", root.foreground, Color.accent)
+
+                  hasCursor: hovered
                   foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  iconText: root.letterFor(modelData)
-                  text: modelData + "  " + root.quickRowText(modelData)
-                  onClicked: root.chooseStation(modelData)
+                  width: Math.max(0, parent.width - parent.spacing - trash.width)
+                  height: Math.max(Style.space(22),
+                    quickRowContent.implicitHeight + Style.spacing.controlPaddingY * 2
+                      + Border.top(hoverSpec) + Border.bottom(hoverSpec))
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  HoverHandler {
+                    onHoveredChanged: quickRowSurface.hovered = hovered
+                  }
+
+                  Row {
+                    id: quickRowContent
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.spacing.controlPaddingX
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(6)
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: quickRow.modelData
+                      width: Style.space(46)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    // The category in the aviation colour the pill uses, so
+                    // the list can be read down this one column.
+                    Text {
+                      textFormat: Text.PlainText
+                      text: root.quickCategory(quickRow.modelData) || "—"
+                      width: Style.space(44)
+                      color: root.quickCategoryColor(quickRow.modelData)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: root.quickAgeText(quickRow.modelData)
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.chooseStation(quickRow.modelData)
+                  }
                 }
 
                 // Removing a row is the one destructive action here, so it gets
@@ -552,11 +611,11 @@ Panel {
                 PanelActionButton {
                   id: trash
                   iconText: "󰩹"
-                  tooltipText: "Remove " + modelData + " from the quick list"
+                  tooltipText: "Remove " + quickRow.modelData + " from the quick list"
                   foreground: root.dim
                   hoverColor: Color.urgent
                   anchors.verticalCenter: parent.verticalCenter
-                  onClicked: root.removeFromQuickList(modelData)
+                  onClicked: root.removeFromQuickList(quickRow.modelData)
                 }
               }
             }
@@ -1188,20 +1247,27 @@ Panel {
     }
   }
 
-  function letterFor(code) {
+  // The quick list reads down three columns: the code, the category in its
+  // aviation colour, and the age of the observation. The category word rather
+  // than the single letter, because the colour now carries the code and a
+  // letter beside a coloured word would be the same information twice.
+  function quickCategory(code) {
     if (!root.service) return ""
-    return service.categoryLetter(service.categoryFor(code))
+    var report = root.service.reportFor(code)
+    return report ? String(report.category || "") : ""
   }
 
-  function quickRowText(code) {
+  function quickCategoryColor(code) {
+    var role = Model.categoryColorRole(root.quickCategory(code))
+    return root.categoryColors[role] !== undefined ? root.categoryColors[role] : root.dim
+  }
+
+  function quickAgeText(code) {
     if (!root.service) return ""
-    var report = service.reportFor(code)
+    var report = root.service.reportFor(code)
     if (!report) return "no observation"
-    var age = ""
-    if (report.obsTime) {
-      var minutes = Math.round((Date.now() - report.obsTime) / 60000)
-      age = minutes <= 0 ? "now" : minutes + " min ago"
-    }
-    return (report.category || "—") + (age !== "" ? "  ·  " + age : "")
+    if (!report.obsTime) return ""
+    var minutes = Math.round((Date.now() - report.obsTime) / 60000)
+    return minutes <= 0 ? "now" : minutes + " min ago"
   }
 }

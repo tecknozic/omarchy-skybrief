@@ -10,6 +10,10 @@ glance, decoded or raw, with optional NOTAMs.
 
 ## What it shows
 
+![SkyBrief's popup on EGLL: decoded METAR, the forecast with its group in force
+marked NOW and its category timeline, and the quick list of
+stations](preview.png)
+
 A one-letter pill in the bar, one letter per flight category:
 
 | Letter | Category | Meaning |

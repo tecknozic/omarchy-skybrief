@@ -26,11 +26,14 @@ that changed with the wallpaper would stop meaning "VFR".
 States that are not a category have their own glyph: `?` when the station has no
 observation, `!` when the network is unreachable, `…` before the first answer.
 
-Left click opens a popup with the observation, a TAF timeline and a quick list
-of stations. The **Details** button widens it into the full view: decoded METAR
-and TAF, wind components per runway, cloud layers, SIGMETs for the configured
-FIR, and NOTAMs when they are configured. Middle click refreshes; right click
-opens the detail view directly.
+Left click opens a popup: the METAR and, directly under it, the TAF with its
+category timeline, then the quick list of stations. Each of the two reports has
+a copy button on its own header line. **Details** widens the popup into the view
+that holds what does not fit in a glance — wind components per runway, SIGMETs
+for the configured FIR, and NOTAMs when they are configured — and closes it
+again on a second click. Middle click refreshes; right click opens the detail
+view directly. With the popup open, `r` refreshes, `c` copies the raw METAR,
+`t` the raw TAF, and `d` toggles the detail view.
 
 ## Data sources
 
@@ -84,7 +87,7 @@ omarchy bar set io.github.tecknozic.skybrief notamSource autorouter
 | `quickStations` | *(empty)* | Comma-separated codes offered as one-click rows in the popup, **ten at most**. Extra codes are ignored; the header shows the count. |
 | `fir` | *(empty)* | FIR identifier (`LFFF`, `EDGG`, …) whose NOTAMs and SIGMETs are shown alongside the aerodrome's. |
 | `showRaw` | `true` | Start on the raw report text rather than the decoded reading. |
-| `units` | `metric` | Applies to temperature, visibility and altimeter **only**. Wind stays in knots and cloud base in feet. |
+| `units` | `metric` | Applies to temperature, visibility and altimeter **only**. Wind stays in knots and cloud base in feet, as it is spoken. |
 | `timeFormat` | `utc` | `utc` shows `07:30Z`; `local` shows the local clock with a zone suffix. |
 | `refreshMinutes` | `10` | How often the reports are re-fetched. |
 | `maxAgeMinutes` | `75` | An observation older than this is flagged as stale in the popup and the tooltip. |

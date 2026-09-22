@@ -419,6 +419,10 @@ Item {
     status = "ready"
     lastError = ""
     requestStationInfo(favourite)
+    // Runway metadata is only ever read by the detail view, but it is fetched
+    // with the report that produces the crosswind numbers: a request made when
+    // the view opens would show an empty table behind a click.
+    requestRunways(favourite)
     announceIfSevere(favourite)
   }
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 — 2026-09-22
+
+The popup now leads with both reports; the detail view is what is left over.
+
+- TAF shown by default under the METAR, with its category timeline.
+- A copy button on each report's header line — METAR and TAF — instead of one
+  button at the bottom of the panel. `t` copies the TAF, next to the existing
+  `c` for the METAR.
+- Refresh moved to the top right of the header, beside the category pill.
+- Details is now runways, SIGMET and NOTAM only, and closes on a second click;
+  the separate Back button is gone.
+- The WIND and CLOUD sections are removed: both were a second reading of the
+  report text shown above them.
+- Fixed requestRunways never being called, so runway components never appeared.
+
 ## 0.1.0 — 2026-09-22
 
 Initial release.

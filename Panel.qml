@@ -5,12 +5,12 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// The popup: a compact flight-weather card, and — behind the Details button —
-// the full decoded report with wind components, cloud layers, SIGMETs and
-// NOTAMs.
+// The popup: the observation and the forecast it leads into, then — behind the
+// Details button — what does not fit in a glance: runway wind components,
+// SIGMETs and NOTAMs.
 //
 // `expanded` is a view state, not a second window: the same KeyboardPanel grows
-// and its content column swaps. One escape key, one focus target, one popout
+// and a column appears at the end. One escape key, one focus target, one popout
 // identity.
 Panel {
   id: root
@@ -66,6 +66,22 @@ Panel {
   readonly property bool notamPending: root.service ? root.service.notamPending === true : false
   readonly property var stationMeta: root.service ? root.service.stationInfo[root.station] || null : null
   readonly property var runways: root.service ? root.service.runwaysFor(root.station) : []
+
+  // Runway components need a known field, a known wind, and a direction to
+  // resolve it against. Without all three the table is a column of dashes, so
+  // the section is not shown at all — and the detail view, which is then
+  // whatever else is enabled, does not get a leading separator for it.
+  readonly property bool hasRunwayComponents: root.runways.length > 0 && root.report !== null
+    && root.report.wind && root.report.wind.speedKt !== null && root.report.wind.dir !== null
+  readonly property bool sigmetSectionVisible: root.configuredFir !== ""
+    && (root.sigmets.length > 0 || root.sigmetError !== "")
+
+  // Runways, SIGMET and NOTAMs are the whole of the detail view, and any of the
+  // three can be absent: no wind means no crosswind table, no configured FIR
+  // means no SIGMET, no autorouter account means no NOTAM. When all three are
+  // absent the view would open empty, so it says so instead.
+  readonly property bool detailHasContent: root.hasRunwayComponents || root.sigmetSectionVisible || root.notamsEnabled
+  readonly property string detailLabel: root.expanded ? "Close" : "Details"
   readonly property string category: report ? String(report.category || "") : ""
   readonly property color foreground: root.bar ? root.bar.foreground : Color.foreground
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
@@ -76,6 +92,29 @@ Panel {
   readonly property color dim: Qt.darker(root.foreground, 1.4)
 
   readonly property string heroTitle: station !== "" ? station : "SkyBrief"
+
+  // The forecast is read twice — once as its own section, once inside the
+  // detail view it no longer appears in — so the text is built in one place.
+  readonly property string tafText: {
+    if (!root.taf) return ""
+    if (root.showRaw) return root.taf.raw
+
+    var text = "Valid " + Model.formatObsTime(root.taf.validTimeFrom, timeFormat)
+      + " to " + Model.formatObsTime(root.taf.validTimeTo, timeFormat) + "."
+    for (var i = 0; i < root.taf.periods.length; i++) {
+      var period = root.taf.periods[i]
+      var header = Model.formatObsTime(period.timeFrom, timeFormat)
+        + (period.change ? " " + period.change : "")
+        + (period.probability !== null && period.probability !== undefined ? " PROB" + period.probability : "")
+      text += "\n" + header + " — " + (period.category || "—")
+        + (period.wspd !== null ? ", " + (period.wdir === "VRB" ? "variable" : period.wdir + "°") + " " + period.wspd + " kt" : "")
+        + (period.wgst !== null ? " gusting " + period.wgst : "")
+        + (period.visibility && period.visibility.meters !== null
+          ? ", visibility " + Model.formatVisibility(period.visibility, units) : "")
+    }
+    return text
+  }
+
   readonly property string heroMeta: {
     if (!report) return status === "offline" ? "OFFLINE" : "NO REPORT"
     var name = stationMeta && stationMeta.name ? stationMeta.name : (report.name || "")
@@ -238,8 +277,9 @@ Panel {
       onCloseRequested: root.expanded ? root.expanded = false : root.close()
       onTextKey: function(text) {
         if (text === "r") root.refresh()
-        else if (text === "d") root.expanded = !root.expanded
+        else if (text === "d" && root.detailHasContent) root.expanded = !root.expanded
         else if (text === "c" && root.report) root.copy(root.report.raw)
+        else if (text === "t" && root.taf) root.copy(root.taf.raw)
       }
       // Arrows and j/k scroll the card. The panel is reachable by keyboard, so
       // the detail view must be readable without a mouse.
@@ -308,6 +348,20 @@ Panel {
                 color: root.category !== "" ? root.categoryColor : root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
+              }
+            }
+            // The refresh lives on the header, right after the category pill:
+            // it acts on the whole card, and the card starts here. The hero
+            // reserves the space itself, so the pill never collides with it.
+            trailingControl: Component {
+              PanelActionButton {
+                id: refreshButton
+                iconText: "󰑓"
+                tooltipText: root.service && root.service.status === "loading"
+                  ? "Refreshing…" : "Refresh now"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.refresh()
               }
             }
           }
@@ -380,10 +434,35 @@ Panel {
           // ---- METAR -----------------------------------------------------
 
           PanelSeparator { width: parent.width }
-          PanelSectionHeader {
-            text: root.taf ? "METAR" : "OBSERVATION"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
+
+          // The copy affordance sits on the header line of the text it copies,
+          // one row per report: a button next to the text it acts on cannot be
+          // mistaken for a button acting on the panel.
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSectionHeader {
+              id: metarHeader
+              text: root.taf ? "METAR" : "OBSERVATION"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Item {
+              width: Math.max(0, parent.width - metarHeader.implicitWidth - copyMetar.width - parent.spacing * 2)
+              height: 1
+            }
+
+            PanelActionButton {
+              id: copyMetar
+              iconText: "󰆏"
+              tooltipText: "Copy the raw METAR"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.copy(root.report ? root.report.raw : "")
+            }
           }
 
           Text {
@@ -399,14 +478,52 @@ Panel {
             font.pixelSize: Style.font.body
           }
 
-          // ---- TAF frise -------------------------------------------------
+          // ---- TAF -------------------------------------------------------
 
+          // The forecast is shown by default, right under the observation it
+          // continues: the two are read together, and a forecast a click away
+          // is a forecast nobody looks at.
           PanelSeparator { visible: root.taf !== null; width: parent.width }
-          PanelSectionHeader {
+
+          Row {
             visible: root.taf !== null
-            text: "FORECAST"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSectionHeader {
+              id: forecastHeader
+              text: "FORECAST"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Item {
+              width: Math.max(0, parent.width - forecastHeader.implicitWidth - tafCopyButton.width - parent.spacing * 2)
+              height: 1
+            }
+
+            PanelActionButton {
+              id: tafCopyButton
+              iconText: "󰆏"
+              tooltipText: "Copy the raw TAF"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.copy(root.taf ? root.taf.raw : "")
+            }
+          }
+
+          // The raw forecast is one line of coded groups; the decoded one is the
+          // same forecast spelled out period by period.
+          Text {
+            visible: root.taf !== null
+            width: parent.width
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            text: root.tafText
+            color: root.foreground
+            font.family: root.showRaw ? Style.font.family : root.fontFamily
+            font.pixelSize: root.showRaw ? Style.font.bodySmall : Style.font.body
           }
 
           Canvas {
@@ -674,33 +791,31 @@ Panel {
 
           // ---- actions ---------------------------------------------------
 
-          Row {
+          // One control, and it says what it does in both directions: the
+          // second click is the way back, so a separate Back button would be a
+          // second name for the same action.
+          Button {
             width: parent.width
-            spacing: Style.space(8)
+            bordered: true
+            visible: root.detailHasContent
+            iconText: root.expanded ? "󰁍" : "󰒡"
+            text: root.detailLabel
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.expanded = !root.expanded
+          }
 
-            Button {
-              width: (parent.width - parent.spacing * 2) / 2
-              bordered: true
-              iconText: "󰒡"
-              text: "Details"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.expanded = true
-            }
-
-            PanelActionButton {
-              iconText: "󰑓"
-              tooltipText: "Refresh now"
-              foreground: root.foreground
-              onClicked: root.refresh()
-            }
-
-            PanelActionButton {
-              iconText: "󰆏"
-              tooltipText: "Copy the raw METAR"
-              foreground: root.foreground
-              onClicked: root.copy(root.report ? root.report.raw : "")
-            }
+          // Nothing to unfold — and saying which of the three conditions is
+          // missing would mean naming a setting the user may not even want.
+          Text {
+            visible: !root.detailHasContent
+            width: parent.width
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            text: "No runway data for this field, no FIR configured, and NOTAMs off — nothing to unfold."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
           }
 
           Text {
@@ -714,7 +829,7 @@ Panel {
           }
 
           // ================================================================
-          // Detail view
+          // Detail view — runways, SIGMET, NOTAM
           // ================================================================
 
           Column {
@@ -722,106 +837,13 @@ Panel {
             width: parent.width
             spacing: Style.space(14)
 
-            PanelSeparator { width: parent.width }
-
-            // ---- METAR and TAF ----------------------------------------
-            //
-            // One version or the other, never both, and never a second switch:
-            // the toggle at the top of the panel is the only control for raw
-            // versus decoded, and the detail view obeys the same choice. Two
-            // switches for one setting would be two places to look to find out
-            // which text you are reading.
-
-            PanelSectionHeader {
-              text: "METAR"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            Text {
-              visible: root.report !== null
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: root.report
-                ? (root.showRaw ? root.report.raw : Model.decodeMetar(root.report, root.units))
-                : ""
-              color: root.foreground
-              font.family: Style.font.family
-              font.pixelSize: root.showRaw ? Style.font.bodySmall : Style.font.body
-            }
-
-            PanelSeparator { visible: root.taf !== null; width: parent.width }
-            PanelSectionHeader {
-              visible: root.taf !== null
-              text: "TAF"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            // The raw forecast is one line of coded groups; the decoded one is
-            // the same forecast spelled out period by period.
-            Text {
-              visible: root.taf !== null
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: {
-                if (!root.taf) return ""
-                if (root.showRaw) return root.taf.raw
-
-                var text = "Valid " + Model.formatObsTime(root.taf.validTimeFrom, root.timeFormat)
-                  + " to " + Model.formatObsTime(root.taf.validTimeTo, root.timeFormat) + "."
-                for (var i = 0; i < root.taf.periods.length; i++) {
-                  var period = root.taf.periods[i]
-                  var header = Model.formatObsTime(period.timeFrom, root.timeFormat)
-                    + (period.change ? " " + period.change : "")
-                    + (period.probability !== null && period.probability !== undefined ? " PROB" + period.probability : "")
-                  text += "\n" + header + " — " + (period.category || "—")
-                    + (period.wspd !== null ? ", " + (period.wdir === "VRB" ? "variable" : period.wdir + "°") + " " + period.wspd + " kt" : "")
-                    + (period.wgst !== null ? " gusting " + period.wgst : "")
-                    + (period.visibility && period.visibility.meters !== null
-                      ? ", visibility " + Model.formatVisibility(period.visibility, root.units) : "")
-                }
-                return text
-              }
-              color: root.foreground
-              font.family: root.showRaw ? Style.font.family : root.fontFamily
-              font.pixelSize: root.showRaw ? Style.font.bodySmall : Style.font.body
-            }
-
-            // ---- wind ---------------------------------------------------
-
-            PanelSeparator { visible: root.report !== null; width: parent.width }
-            PanelSectionHeader {
-              visible: root.report !== null
-              text: "WIND"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            Text {
-              visible: root.report !== null
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: root.report ? Model.formatWind(root.report, root.units)
-                + (root.report.wind && root.report.wind.variable
-                  ? "  ·  varying " + root.report.wind.variable[0] + "°–" + root.report.wind.variable[1] + "°" : "")
-                : ""
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
+            // ---- runway components -------------------------------------
 
             Column {
               width: parent.width
               spacing: Style.space(2)
-              // No runways known for this field — the section simply is not
-              // there rather than showing an empty table.
-              visible: root.runways.length > 0 && root.report !== null
-                && root.report.wind && root.report.wind.speedKt !== null
-                && root.report.wind.dir !== null
+              visible: root.hasRunwayComponents
+              PanelSeparator { width: parent.width }
 
               PanelSectionHeader {
                 text: "RUNWAY COMPONENTS"
@@ -830,7 +852,7 @@ Panel {
               }
 
               Repeater {
-                model: root.runways
+                model: root.hasRunwayComponents ? root.runways : []
 
                 Row {
                   required property var modelData
@@ -870,39 +892,6 @@ Panel {
                   }
                 }
               }
-            }
-
-            // ---- clouds ------------------------------------------------
-
-            PanelSeparator { visible: root.report !== null; width: parent.width }
-            PanelSectionHeader {
-              visible: root.report !== null
-              text: "CLOUD"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            Text {
-              visible: root.report !== null
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: {
-                if (!root.report) return ""
-                // An empty layer list is not missing data: CAVOK, NSC and SKC
-                // all mean, positively, that nothing significant is there.
-                var text = root.report.clouds.length === 0
-                  ? "no significant cloud reported"
-                  : Model.formatClouds(root.report.clouds, root.units)
-                if (root.report.ceilingFt !== null && root.report.ceilingFt !== undefined)
-                  text += "\nceiling " + Math.round(root.report.ceilingFt) + " ft"
-                else
-                  text += "\nno ceiling"
-                return text
-              }
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
             }
 
             // ---- SIGMET ------------------------------------------------
@@ -973,7 +962,13 @@ Panel {
 
             // ---- NOTAM -------------------------------------------------
 
-            PanelSeparator { width: parent.width }
+            // The NOTAM block is the last one, so the rule above it belongs to
+            // it only when something actually precedes it — a separator at the
+            // top of the detail view separates nothing.
+            PanelSeparator {
+              visible: root.hasRunwayComponents || root.sigmetSectionVisible
+              width: parent.width
+            }
             PanelSectionHeader {
               text: "NOTAM"
               foreground: root.foreground
@@ -1214,19 +1209,6 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.clearCredentials()
-            }
-
-            // ---- back --------------------------------------------------
-
-            PanelSeparator { width: parent.width }
-            Button {
-              width: parent.width
-              bordered: true
-              iconText: "󰁍"
-              text: "Back"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.expanded = false
             }
           }
         }

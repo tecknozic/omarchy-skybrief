@@ -461,19 +461,6 @@ function formatVisibility(visibility, units) {
   return Math.round(meters) + " m"
 }
 
-function formatClouds(clouds, units) {
-  if (!Array.isArray(clouds) || !clouds.length) return "—"
-  var parts = []
-  for (var i = 0; i < clouds.length; i++) {
-    var c = clouds[i]
-    if (!c) continue
-    var cover = String(c.cover === null || c.cover === undefined ? "" : c.cover).toUpperCase()
-    var base = numberOrNull(c.baseFt)
-    parts.push(base === null ? cover : cover + " " + Math.round(base) + " ft")
-  }
-  return parts.length ? parts.join(", ") : "—"
-}
-
 function formatAltimeter(hpa, units) {
   var value = numberOrNull(hpa)
   if (value === null) return "—"
@@ -1039,7 +1026,6 @@ if (typeof module !== "undefined") {
     formatObsTime: formatObsTime,
     formatWind: formatWind,
     formatVisibility: formatVisibility,
-    formatClouds: formatClouds,
     formatAltimeter: formatAltimeter,
     formatTemp: formatTemp,
     decodeWeatherToken: decodeWeatherToken,

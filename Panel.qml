@@ -106,14 +106,20 @@ Panel {
   // Settings writes go through the shell so the choice survives a restart.
   // The whole entry is merged, never replaced: writing one key must not drop
   // the others.
-  function writeSetting(key, value) {
+  function writeSettings(changes) {
     if (!bar || !bar.shell || typeof bar.shell.updateEntryInline !== "function") return
     var entry = { id: root.moduleName }
     var source = root.settings || {}
     for (var existing in source) if (existing !== "id") entry[existing] = source[existing]
-    entry[key] = value
+    for (var key in changes) entry[key] = changes[key]
     root.settings = entry
     bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function writeSetting(key, value) {
+    var changes = {}
+    changes[key] = value
+    writeSettings(changes)
   }
 
   function chooseStation(code) {
@@ -129,6 +135,22 @@ Panel {
     var list = Model.parseStationList(root.settings ? root.settings.quickStations : "")
     if (list.indexOf(icao) === -1) list.push(icao)
     writeSetting("quickStations", list.join(","))
+  }
+
+  // Removing the station that is currently the favourite would leave the widget
+  // reading a code it is no longer offered, so the favourite is cleared in the
+  // same write and falls back to the nearest reporting field.
+  function removeFromQuickList(code) {
+    var icao = String(code || "").trim().toUpperCase()
+    var list = Model.parseStationList(root.settings ? root.settings.quickStations : "")
+    var next = []
+    for (var i = 0; i < list.length; i++) if (list[i] !== icao) next.push(list[i])
+
+    var changes = { quickStations: next.join(",") }
+    if (String(root.settings ? root.settings.station : "").trim().toUpperCase() === icao)
+      changes.station = ""
+    writeSettings(changes)
+    refresh()
   }
 
   function copy(text) {
@@ -280,18 +302,38 @@ Panel {
 
           // ---- raw / decoded ---------------------------------------------
 
+          // The label names the CURRENT mode and the control is the switch, not
+          // a sentence about what switching does: the METAR text below is the
+          // explanation, and the description was restating it.
           Row {
             width: parent.width
             spacing: Style.space(8)
 
-            Toggle {
-              width: parent.width
-              label: root.showRaw ? "Raw reports" : "Decoded reports"
-              description: "Switch between the raw METAR text and a plain-language reading."
+            Text {
+              textFormat: Text.PlainText
+              text: root.showRaw ? "Raw" : "Decoded"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Item {
+              width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.spacing - rawToggle.implicitWidth)
+              height: 1
+            }
+
+            ToggleSwitch {
+              id: rawToggle
               checked: root.showRaw
               foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.writeSetting("showRaw", !root.showRaw)
+              anchors.verticalCenter: parent.verticalCenter
+              onToggled: root.writeSetting("showRaw", !root.showRaw)
+              PanelToolTip {
+                visible: rawToggle.containsMouse
+                text: root.showRaw ? "Show the decoded reading" : "Show the raw METAR text"
+                fontFamily: root.fontFamily
+              }
             }
           }
 
@@ -331,7 +373,7 @@ Panel {
             id: frise
             visible: root.taf !== null
             width: parent.width
-            height: Style.space(34)
+            height: Style.space(52)
 
             // A Canvas does not re-run paint() when a binding input changes, so
             // the repaint is driven from the forecast object itself: the service
@@ -342,29 +384,59 @@ Panel {
             onWidthChanged: requestPaint()
             onVisibleChanged: if (visible) requestPaint()
 
+            // Bands occupy the top half; the bottom half is the time axis.
+            readonly property real bandHeight: Math.round(height * 0.58)
+            readonly property real axisHeight: height - bandHeight
+
             onPaint: {
               var ctx = getContext("2d")
               ctx.reset()
               if (!root.taf) return
 
               var timeline = Model.tafTimeline(root.taf.periods, Date.now(), width)
+              var band = frise.bandHeight
+
               for (var i = 0; i < timeline.segments.length; i++) {
                 var segment = timeline.segments[i]
                 var role = Model.categoryColorRole(segment.category)
                 ctx.fillStyle = root.categoryColors[role] !== undefined ? root.categoryColors[role] : "#888888"
                 ctx.globalAlpha = segment.overlay ? 0.45 : 0.9
-                var y = segment.overlay ? height / 2 + 2 : 2
-                var h = segment.overlay ? height / 2 - 4 : height - 4
+                var y = segment.overlay ? band / 2 + 1 : 1
+                var h = segment.overlay ? band / 2 - 3 : band - 3
                 ctx.fillRect(segment.x, y, Math.max(1, segment.width - 1), h)
               }
               ctx.globalAlpha = 1
 
+              // Hour marks. A tick is drawn for every label so the eye can
+              // follow it down from the band, with the label below the axis.
+              ctx.font = Math.round(Style.font.caption) + "px " + root.fontFamily
+              ctx.textBaseline = "top"
+              for (var t = 0; t < timeline.ticks.length; t++) {
+                var tick = timeline.ticks[t]
+                ctx.strokeStyle = root.foreground
+                ctx.globalAlpha = tick.dayStart ? 0.65 : 0.3
+                ctx.lineWidth = 1
+                ctx.beginPath()
+                ctx.moveTo(tick.x, band)
+                ctx.lineTo(tick.x, band + (tick.dayStart ? 5 : 3))
+                ctx.stroke()
+
+                ctx.globalAlpha = 1
+                ctx.fillStyle = root.dim
+                var textWidth = ctx.measureText(tick.label).width
+                // Clamp inside the canvas rather than letting the first and
+                // last labels bleed off the card.
+                var textX = Math.max(0, Math.min(width - textWidth, tick.x - textWidth / 2))
+                ctx.fillText(tick.label, textX, band + 6)
+              }
+
               if (timeline.nowX !== null) {
                 ctx.strokeStyle = root.foreground
+                ctx.globalAlpha = 1
                 ctx.lineWidth = 1
                 ctx.beginPath()
                 ctx.moveTo(timeline.nowX, 0)
-                ctx.lineTo(timeline.nowX, height)
+                ctx.lineTo(timeline.nowX, band)
                 ctx.stroke()
               }
             }
@@ -417,16 +489,34 @@ Panel {
             Repeater {
               model: Model.parseStationList(root.quickStations)
 
-              Button {
+              Row {
                 required property string modelData
                 width: parent.width
-                leftAlign: true
-                bordered: false
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                iconText: root.letterFor(modelData)
-                text: modelData + "  " + root.quickRowText(modelData)
-                onClicked: root.chooseStation(modelData)
+                spacing: Style.space(4)
+
+                Button {
+                  width: Math.max(0, parent.width - parent.spacing - trash.width)
+                  leftAlign: true
+                  bordered: false
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  iconText: root.letterFor(modelData)
+                  text: modelData + "  " + root.quickRowText(modelData)
+                  onClicked: root.chooseStation(modelData)
+                }
+
+                // Removing a row is the one destructive action here, so it gets
+                // the urgent hover tint — the same convention the network and
+                // bluetooth panels use for forget/unpair.
+                PanelActionButton {
+                  id: trash
+                  iconText: "󰩹"
+                  tooltipText: "Remove " + modelData + " from the quick list"
+                  foreground: root.dim
+                  hoverColor: Color.urgent
+                  anchors.verticalCenter: parent.verticalCenter
+                  onClicked: root.removeFromQuickList(modelData)
+                }
               }
             }
           }

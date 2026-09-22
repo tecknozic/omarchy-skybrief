@@ -286,6 +286,52 @@ test("tafTimeline tiles the validity window and marks overlays", function () {
   assert.equal(bands[bands.length - 1].x + bands[bands.length - 1].width, 300)
 })
 
+test("tafTimeline labels the axis on clock hours, widened to fit", function () {
+  var taf = Model.parseTaf({
+    icaoId: "LFPG",
+    rawTAF: "TAF LFPG 220500Z 2206/2312 05005KT CAVOK",
+    validTimeFrom: 1790056800,   // 22/06:00Z
+    validTimeTo: 1790164800      // 23/12:00Z, a 30-hour validity
+  })
+
+  // 30 hours over 350px: one tick per hour would collide, so the step widens.
+  var wide = Model.tafTimeline(taf.periods, null, 350)
+  assert.ok(wide.ticks.length > 0)
+  assert.ok(wide.ticks.length <= 12, "30 h over 350px must not draw 30 labels")
+  // The validity start is always labelled, whatever the step lands on.
+  assert.equal(wide.ticks[0].x, 0)
+  // Ticks are ordered and inside the canvas.
+  for (var i = 0; i < wide.ticks.length; i++) {
+    assert.ok(wide.ticks[i].x >= 0 && wide.ticks[i].x <= 350)
+    if (i > 0) assert.ok(wide.ticks[i].x > wide.ticks[i - 1].x)
+  }
+  // Labels are bare UTC hours, whatever the span: the date on the axis said
+  // less than the space it took.
+  assert.equal(wide.ticks[0].label, "06Z")
+  assert.ok(wide.ticks.every(function (t) { return /^[0-9]{2}Z$/.test(t.label) }))
+  // Midnight is still tagged, so a long validity keeps its day boundaries
+  // readable without spelling the date out.
+  assert.ok(wide.ticks.some(function (t) { return t.label === "00Z" && t.dayStart }))
+
+  // A short validity gets hourly labels without the date.
+  var short = Model.tafTimeline([
+    { timeFrom: Date.UTC(2026, 8, 22, 6), timeTo: Date.UTC(2026, 8, 22, 10), category: "VFR" }
+  ], null, 350)
+  assert.deepEqual(short.ticks.map(function (t) { return t.label }),
+    ["06Z", "07Z", "08Z", "09Z", "10Z"])
+
+  // No forecast, no ticks.
+  assert.deepEqual(Model.tafTimeline([], null, 350).ticks, [])
+})
+
+test("tafTimeline keeps every band tiling a zero-width canvas", function () {
+  var timeline = Model.tafTimeline([
+    { timeFrom: 1000, timeTo: 4000, category: "VFR", change: null, probability: null }
+  ], null, 0)
+  assert.deepEqual(timeline.ticks, [])
+  assert.equal(timeline.segments.length, 1)
+})
+
 test("tafTimeline renders TEMPO bands as overlays without replacing the parent", function () {
   var period = function (from, to, category, change, probability) {
     return { timeFrom: from, timeTo: to, category: category, change: change, probability: probability }

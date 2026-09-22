@@ -769,7 +769,7 @@ function tafTimeline(periods, nowMs, widthPx) {
       list.push(p)
     }
   }
-  if (!list.length) return { segments: [], nowX: null, fromMs: null, toMs: null }
+  if (!list.length) return { segments: [], nowX: null, fromMs: null, toMs: null, ticks: [] }
 
   var fromMs = list[0].timeFrom
   var toMs = list[0].timeTo
@@ -841,7 +841,67 @@ function tafTimeline(periods, nowMs, widthPx) {
   var nowValue = numberOrNull(nowMs)
   var nowX = nowValue !== null && nowValue >= fromMs && nowValue <= toMs ? projectX(nowValue) : null
 
-  return { segments: segments, nowX: nowX, fromMs: fromMs, toMs: toMs }
+  return {
+    segments: segments,
+    nowX: nowX,
+    fromMs: fromMs,
+    toMs: toMs,
+    ticks: timelineTicks(fromMs, toMs, width, projectX)
+  }
+}
+
+// Hour marks along the frise. A TAF's own periods can be unreadably wide (a
+// 30-hour validity over a 350px card with one BECMG eight hours in says
+// nothing about WHEN), so the axis is labelled on clock hours in UTC — the
+// same hours the raw report is written in, and the ones a pilot reads off the
+// TAF itself.
+//
+// The step widens with the span so the labels never collide: the frise is a
+// glance, and two labels a few pixels apart are worse than none.
+function timelineTicks(fromMs, toMs, widthPx, projectX) {
+  var span = toMs - fromMs
+  if (span <= 0 || widthPx <= 0) return []
+
+  var spanHours = span / 3600000
+  var steps = [1, 2, 3, 6, 12, 24]
+  // "06Z" is about 26px at the caption size; 40 leaves a readable gap without
+  // thinning the axis to the point of saying nothing.
+  var minSpacing = 40
+  var step = steps[steps.length - 1]
+  for (var i = 0; i < steps.length; i++) {
+    if (widthPx / (spanHours / steps[i]) >= minSpacing) { step = steps[i]; break }
+  }
+
+  var ticks = []
+  // A "06Z" label is ~26px wide, so anything closer than this would overlap.
+  var minLabelGap = 30
+
+  // The validity start is the one time on the axis that the clock cannot
+  // imply, so it is placed unconditionally; every clock tick then yields to
+  // whatever is already there rather than crowding it.
+  function push(timeMs, force) {
+    var x = projectX(timeMs)
+    if (x < 0 || x > widthPx) return
+    if (!force) {
+      for (var d = 0; d < ticks.length; d++)
+        if (Math.abs(ticks[d].x - x) < minLabelGap) return
+    }
+    ticks.push({
+      x: x,
+      hourMs: timeMs,
+      label: pad2(new Date(timeMs).getUTCHours()) + "Z",
+      dayStart: new Date(timeMs).getUTCHours() === 0
+    })
+  }
+
+  push(fromMs, true)
+  var cursor = new Date(fromMs)
+  cursor = Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), cursor.getUTCHours(), 0, 0, 0)
+  if (cursor < fromMs) cursor += 3600000
+  while (cursor % (step * 3600000) !== 0) cursor += 3600000
+  for (; cursor <= toMs; cursor += step * 3600000) push(cursor, false)
+
+  return ticks
 }
 
 // ---------------------------------------------------------------------------
@@ -952,6 +1012,7 @@ if (typeof module !== "undefined") {
     parseTaf: parseTaf,
     isOverlayPeriod: isOverlayPeriod,
     tafTimeline: tafTimeline,
+    timelineTicks: timelineTicks,
     haversineKm: haversineKm,
     nearestReportingStation: nearestReportingStation,
     crosswindComponents: crosswindComponents,

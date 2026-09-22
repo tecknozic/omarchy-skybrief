@@ -38,6 +38,11 @@ Item {
   readonly property int processTimeoutSec: 25
   readonly property int maxResponseBytes: 524288
   readonly property int maxRequestedStations: 12
+  // How far around a geocoded place the station search looks, and how many
+  // candidates it offers. One degree is about 110 km, so ±0.6° covers an
+  // airport serving a city without dragging in the next region's fields.
+  readonly property real searchRadiusDegrees: 0.6
+  readonly property int maxSearchResults: 8
 
   // ---- settings ----------------------------------------------------------
 
@@ -73,6 +78,11 @@ Item {
   readonly property string alertCategory: String(setting("alertCategory", "off"))
   readonly property string notamSource: String(setting("notamSource", "off"))
   readonly property int notamLimit: Math.max(5, Math.min(100, Number(setting("notamLimit", 40)) || 40))
+  // How far back the METAR request reaches. The API caps a response at six
+  // observations per station (measured), so asking for more hours than the
+  // trend reads only makes the response bigger, not the trend longer.
+  readonly property int historyHours: 3
+  readonly property int historyCount: Math.max(0, Math.min(6, Number(setting("historyCount", 3)) || 0))
 
   // Called by the bar widget on every settings change and at panel open. A
   // settings change that moves the station or the refresh cadence takes effect
@@ -93,6 +103,9 @@ Item {
 
   // icaoId -> parsed METAR
   property var reports: ({})
+  // icaoId -> earlier parsed METARs, newest first. Kept out of `reports` so
+  // nothing that reads one current report can accidentally read a list.
+  property var histories: ({})
   property var tafs: ({})
   property var sigmets: []
   property var notams: ({ forStation: [], forFir: [] })
@@ -272,7 +285,43 @@ Item {
 
   function fetchInFlight() {
     return metarProc.running || tafProc.running || sigmetProc.running
-      || nearestProc.running || geocodeProc.running
+      || nearestProc.running || geocodeProc.running || searchProc.running
+      || searchGeocodeProc.running
+  }
+
+  // ---- search by name ----------------------------------------------------
+  //
+  // The API has no name search: `ids=` takes codes only, and `stationinfo`
+  // refuses a name. So a typed name is geocoded to a point, the reporting
+  // fields around that point are fetched by bounding box, and the names in the
+  // response are matched locally (Model.matchStationsByName). The result is a
+  // shortlist to choose from, never an automatic switch of the favourite: a
+  // place name is ambiguous in a way an ICAO code is not.
+
+  property var searchResults: []
+  property string searchError: ""
+  property bool searchPending: false
+
+  function searchByName(query) {
+    var text = String(query || "").trim()
+    searchResults = []
+    searchError = ""
+    if (text.length < 3) {
+      searchError = "Type at least three characters."
+      return
+    }
+    searchPending = true
+    searchGeocodeProc.query = text
+    searchGeocodeProc.generation = generation
+    searchGeocodeProc.command = requestCommand(geocodeUrl + "?name=" + encodeURIComponent(text)
+      + "&count=1&format=json&language=en")
+    searchGeocodeProc.running = true
+  }
+
+  function clearSearch() {
+    searchResults = []
+    searchError = ""
+    searchPending = false
   }
 
   // With no station configured the nearest reporting field is used, taken from
@@ -336,7 +385,11 @@ Item {
 
     metarProc.generation = generation
     metarProc.requested = codes.join(",")
-    metarProc.command = requestCommand(apiBase + "/metar?ids=" + codes.join(",") + "&format=json")
+    // `hours` asks for the past observations as well as the current one, in the
+    // same request: the trend line needs them, and one response carrying both
+    // is cheaper than a second call per station.
+    metarProc.command = requestCommand(apiBase + "/metar?ids=" + codes.join(",")
+      + "&format=json&hours=" + historyHours)
     metarProc.running = true
 
     var favourite = favouriteStation
@@ -384,15 +437,40 @@ Item {
     var entries = parseEntries(raw)
     var requested = Model.parseStationList(metarProc.requested)
 
+    // The response carries every station's window of observations interleaved
+    // (newest report first, then each station's earlier ones). The newest entry
+    // per station is the current report; the rest is that station's history.
     var next = ({})
+    var nextHistories = ({})
     for (var existing in reports) next[existing] = reports[existing]
+
+    var byStation = ({})
     for (var i = 0; i < entries.length; i++) {
-      var parsed = Model.parseMetar(entries[i])
-      if (!parsed) continue
-      Model.markStale(parsed, maxAgeMinutes, Date.now())
-      next[parsed.icaoId] = parsed
+      var entry = entries[i]
+      if (!entry || !entry.icaoId) continue
+      var code = String(entry.icaoId).toUpperCase()
+      if (!byStation[code]) byStation[code] = []
+      byStation[code].push(entry)
+    }
+
+    for (var station in byStation) {
+      var forStation = byStation[station]
+      // Newest wins rather than "first in the array wins": the API happens to
+      // interleave newest-first today, but ordering by the timestamp we already
+      // parse costs nothing and does not depend on that.
+      var current = null
+      for (var s = 0; s < forStation.length; s++) {
+        var parsed = Model.parseMetar(forStation[s])
+        if (!parsed || parsed.obsTime === null) continue
+        if (!current || parsed.obsTime > current.obsTime) current = parsed
+      }
+      if (!current) continue
+      Model.markStale(current, maxAgeMinutes, Date.now())
+      next[current.icaoId] = current
+      nextHistories[current.icaoId] = Model.metarHistory(forStation, current.obsTime, historyCount)
     }
     reports = next
+    histories = nextHistories
 
     var favourite = favouriteStation
     lastSuccessMs = Date.now()
@@ -496,6 +574,13 @@ Item {
     var entry = runwayInfo[String(code || "").toUpperCase()]
     if (!entry || !Array.isArray(entry.runways)) return []
     return entry.runways
+  }
+
+  // Earlier observations of one station, newest first, excluding the current
+  // one. Empty when the trend is switched off or the station is too new.
+  function historyFor(code) {
+    var list = histories[String(code || "").toUpperCase()]
+    return Array.isArray(list) ? list : []
   }
 
   // ---- autorouter --------------------------------------------------------
@@ -781,6 +866,83 @@ Item {
       if (code === 0) return
       if (geocodeProc.generation !== root.generation) return
       root.handleFailure("Geocoding failed", code, "")
+    }
+  }
+
+  // The name search reuses the same geocoder as the nearest-station fallback,
+  // but keeps its own process: sharing geocodeProc would cancel an in-flight
+  // location lookup the moment the user typed a search.
+  Process {
+    id: searchGeocodeProc
+    property int generation: 0
+    property string query: ""
+    command: []
+    clearEnvironment: true
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (searchGeocodeProc.generation !== root.generation) return
+        var latitude = NaN
+        var longitude = NaN
+        try {
+          var data = JSON.parse(String(text || "").trim())
+          var result = data && Array.isArray(data.results) ? data.results[0] : null
+          if (result) {
+            latitude = Number(result.latitude)
+            longitude = Number(result.longitude)
+          }
+        } catch (e) {
+          latitude = NaN
+        }
+        if (!isFinite(latitude) || !isFinite(longitude)) {
+          root.searchPending = false
+          root.searchError = "No place called \"" + searchGeocodeProc.query + "\"."
+          return
+        }
+        searchProc.generation = root.generation
+        searchProc.query = searchGeocodeProc.query
+        searchProc.command = root.requestCommand(root.apiBase + "/metar?bbox="
+          + root.round3(latitude - searchRadiusDegrees) + "," + root.round3(longitude - searchRadiusDegrees) + ","
+          + root.round3(latitude + searchRadiusDegrees) + "," + root.round3(longitude + searchRadiusDegrees)
+          + "&format=json")
+        searchProc.running = true
+      }
+    }
+    onExited: function(code) {
+      if (code === 0) return
+      if (searchGeocodeProc.generation !== root.generation) return
+      root.searchPending = false
+      root.searchError = "Could not search for \"" + searchGeocodeProc.query + "\"."
+    }
+  }
+
+  Process {
+    id: searchProc
+    property int generation: 0
+    property string query: ""
+    command: []
+    clearEnvironment: true
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (String(text || "").length > root.maxResponseBytes) return
+        if (searchProc.generation !== root.generation) return
+        var entries = root.parseEntries(text)
+        var matches = Model.matchStationsByName(entries, searchProc.query, maxSearchResults)
+        root.searchResults = matches
+        root.searchPending = false
+        root.searchError = matches.length
+          ? ""
+          : "No reporting station near \"" + searchProc.query + "\". A nearby airfield may be under a different name."
+      }
+    }
+    onExited: function(code) {
+      if (code === 0) return
+      if (searchProc.generation !== root.generation) return
+      root.searchPending = false
+      root.searchError = "Station search failed."
     }
   }
 

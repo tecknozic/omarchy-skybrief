@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.tecknozic.skybrief",
   "name": "SkyBrief",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "tecknozic",
   "license": "MIT",
   "description": "Aviation weather for the Omarchy bar: METAR, TAF and flight category at a glance, decoded or raw, with optional NOTAMs through an autorouter account.",
@@ -23,6 +23,7 @@
       "timeFormat": "utc",
       "refreshMinutes": 10,
       "maxAgeMinutes": 75,
+      "historyCount": 3,
       "alertCategory": "off",
       "notamSource": "off",
       "notamLimit": 40
@@ -36,6 +37,7 @@
       { "key": "timeFormat", "type": "enum", "label": "Times", "options": ["utc", "local"], "defaultValue": "utc" },
       { "key": "refreshMinutes", "type": "integer", "label": "Refresh interval (minutes)", "min": 2, "max": 120, "step": 1, "defaultValue": 10 },
       { "key": "maxAgeMinutes", "type": "integer", "label": "Stale after (minutes)", "min": 15, "max": 360, "step": 5, "defaultValue": 75 },
+      { "key": "historyCount", "type": "integer", "label": "Earlier observations kept", "description": "How many past observations the trend unfolds. 0 hides the trend entirely.", "min": 0, "max": 6, "step": 1, "defaultValue": 3 },
       { "key": "alertCategory", "type": "enum", "label": "Notify when it drops to", "options": ["off", "MVFR", "IFR", "LIFR"], "defaultValue": "off" },
       { "key": "notamSource", "type": "enum", "label": "NOTAM source", "options": ["off", "autorouter"], "defaultValue": "off", "description": "autorouter requires an account with API access and credentials saved from the detail view." },
       { "key": "notamLimit", "type": "integer", "label": "NOTAMs per query", "min": 5, "max": 100, "step": 5, "defaultValue": 40 }

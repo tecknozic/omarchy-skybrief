@@ -28,12 +28,23 @@ observation, `!` when the network is unreachable, `…` before the first answer.
 
 Left click opens a popup: the METAR and, directly under it, the TAF with its
 category timeline, then the quick list of stations. Each of the two reports has
-a copy button on its own header line. **Details** widens the popup into the view
-that holds what does not fit in a glance — wind components per runway, SIGMETs
-for the configured FIR, and NOTAMs when they are configured — and closes it
-again on a second click. Middle click refreshes; right click opens the detail
-view directly. With the popup open, `r` refreshes, `c` copies the raw METAR,
-`t` the raw TAF, and `d` toggles the detail view.
+a copy button on its own header line. The decoded TAF marks the group in force
+with **NOW**, so the paragraph that applies can be found without comparing five
+clock ranges. A **TREND** line folds out the earlier observations of the same
+station — one METAR says what is happening, three say which way it is going.
+**Details** widens the popup into the view that holds what does not fit in a
+glance — wind components per runway, SIGMETs for the configured FIR, and NOTAMs
+when they are configured — and closes it again on a second click. Middle click
+refreshes; right click opens the detail view directly. With the popup open, `r`
+refreshes, `c` copies the raw METAR, `t` the raw TAF, and `d` toggles the detail
+view.
+
+The search field takes either an **ICAO code** or a **place name**. A
+four-character code is used directly; anything longer is geocoded and matched
+against the reporting fields around that point, and the candidates are listed
+with their names to choose from. A name never switches the favourite on its own:
+"Rennes" and "Brest" each cover several airfields, and only the user knows which
+one was meant.
 
 ## Data sources
 
@@ -91,6 +102,7 @@ omarchy bar set io.github.tecknozic.skybrief notamSource autorouter
 | `timeFormat` | `utc` | `utc` shows `07:30Z`; `local` shows the local clock with a zone suffix. |
 | `refreshMinutes` | `10` | How often the reports are re-fetched. |
 | `maxAgeMinutes` | `75` | An observation older than this is flagged as stale in the popup and the tooltip. |
+| `historyCount` | `3` | How many earlier observations the TREND line unfolds. `0` hides it. The API caps a response at six. |
 | `alertCategory` | `off` | Send a desktop notification when the favourite station's category drops to this level or worse. |
 | `notamSource` | `off` | `autorouter` enables the NOTAM sections. |
 | `notamLimit` | `40` | NOTAMs requested per query (the API caps this at 100). |

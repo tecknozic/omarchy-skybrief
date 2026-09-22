@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 — 2026-09-22
+
+- Search by place name as well as by ICAO code. A name is geocoded, the
+  reporting fields around it are matched locally, and the candidates are listed
+  with their names; picking one selects it and adds it to the quick list.
+- The decoded TAF is spelled out group by group with the group in force marked
+  **NOW**, instead of one running paragraph.
+- TREND: the earlier observations of the station, folded out on click, with
+  `historyCount` (0–6) deciding how many are kept.
+- The METAR request now asks for the past three hours, so the trend needs no
+  extra round trip.
+
 ## 0.2.0 — 2026-09-22
 
 The popup now leads with both reports; the detail view is what is left over.

@@ -774,6 +774,180 @@ function isOverlayPeriod(period) {
   return period.change === "TEMPO" || period.change === "INTER"
 }
 
+// The group that governs NOW: the last prevailing event that has opened, and
+// whose window has not closed. Overlays are deliberately ignored — a TEMPO
+// does not replace the prevailing conditions, it sits over them, and calling
+// one "the current forecast" would understate the forecast it overlays.
+function currentTafPeriod(periods, nowMs) {
+  var now = numberOrNull(nowMs)
+  if (now === null || !Array.isArray(periods)) return null
+
+  var best = null
+  for (var i = 0; i < periods.length; i++) {
+    var p = periods[i]
+    if (!p || isOverlayPeriod(p)) continue
+    var from = numberOrNull(p.timeFrom)
+    var to = numberOrNull(p.timeTo)
+    if (from === null || to === null) continue
+    if (from > now || to <= now) continue
+    // Ties keep the later group, the way tafTimeline resolves a BECMG that
+    // opens at the same hour as the group it replaces.
+    if (!best || from >= best.timeFrom) best = p
+  }
+  return best
+}
+
+// Earlier observations, newest first, for the trend: a METAR only ever says
+// what is happening this half hour, and a falling altimeter or a veering wind
+// is not visible in one reading. Entries must be strictly older than the
+// current one, or the trend would open with the observation already on screen.
+function metarHistory(entries, observedAtMs, limit) {
+  var observedAt = numberOrNull(observedAtMs)
+  if (!Array.isArray(entries)) return []
+  var cap = numberOrNull(limit) === null ? 3 : Math.max(0, Number(limit))
+
+  var history = []
+  for (var i = 0; i < entries.length; i++) {
+    var parsed = parseMetar(entries[i])
+    if (!parsed || numberOrNull(parsed.obsTime) === null) continue
+    if (observedAt !== null && parsed.obsTime >= observedAt) continue
+    history.push(parsed)
+  }
+  history.sort(function (a, b) { return b.obsTime - a.obsTime })
+  return history.slice(0, cap)
+}
+
+// One decoded TAF group as two lines: the heading that says WHEN, and the body
+// that says WHAT. `current` marks the group in force now, which is the one
+// piece of a decoded forecast that is easy to lose among seven lookalike
+// paragraphs.
+function describeTafPeriods(taf, units, timeFormat, nowMs) {
+  if (!taf || !Array.isArray(taf.periods)) return []
+  var useUnits = units === undefined || units === null ? "metric" : units
+  var current = currentTafPeriod(taf.periods, nowMs)
+
+  var lines = []
+  for (var i = 0; i < taf.periods.length; i++) {
+    var period = taf.periods[i]
+    var from = formatObsTime(period.timeFrom, timeFormat)
+    var to = formatObsTime(period.timeTo, timeFormat)
+
+    var heading = from + " – " + to
+    if (period.change) heading += " · " + period.change
+    if (period.probability !== null && period.probability !== undefined) heading += " · PROB" + period.probability
+
+    var parts = [period.category || "—"]
+    if (numberOrNull(period.wspd) !== null) {
+      var dir = period.wdir === "VRB" || numberOrNull(period.wdir) === null
+        ? "variable" : pad3(period.wdir) + "°"
+      var wind = dir + " " + period.wspd + " kt"
+      if (numberOrNull(period.wgst) !== null) wind += " gusting " + period.wgst
+      parts.push(wind)
+    }
+    if (period.visibility && numberOrNull(period.visibility.meters) !== null)
+      parts.push("visibility " + formatVisibility(period.visibility, useUnits))
+
+    lines.push({
+      header: heading,
+      detail: parts.join(", "),
+      category: period.category || "",
+      overlay: isOverlayPeriod(period),
+      current: current !== null && period === current
+    })
+  }
+  return lines
+}
+
+// Normalise a station or place name for comparison: lower case, no accents,
+// punctuation treated as a separator. "Rennes/St Jacques Arpt" and
+// "rennes st jacques" then compare as the same words.
+function normalizePlaceName(value) {
+  var text = String(value === null || value === undefined ? "" : value)
+  text = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  text = text.toLowerCase()
+  text = text.replace(/[^a-z0-9]+/g, " ").trim()
+  return text
+}
+
+// Rank the stations in a bounding-box response against a typed name. The API
+// has no name search of its own — `ids=` takes codes only — so the name is
+// geocoded to a point, the surrounding fields are fetched by bbox, and they are
+// matched here. Every query word must appear in the station name, so "nantes"
+// does not match "Nantes/Atlantique" alone but also excludes Laval; a station
+// whose name merely starts with the query ranks above one that contains it
+// further along, and nearer fields break ties.
+function matchStationsByName(entries, query, limit) {
+  if (!Array.isArray(entries)) return []
+  var words = normalizePlaceName(query).split(" ").filter(function (w) { return w !== "" })
+  if (!words.length) return []
+  var cap = numberOrNull(limit) === null ? 8 : Math.max(0, Number(limit))
+
+  var matches = []
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i]
+    if (!entry || !entry.icaoId) continue
+    var normalized = normalizePlaceName(entry.name)
+    if (normalized === "") continue
+
+    var all = true
+    var prefixHits = 0
+    for (var w = 0; w < words.length; w++) {
+      var word = words[w]
+      if (normalized.indexOf(word) === -1) { all = false; break }
+      var nameWords = normalized.split(" ")
+      for (var n = 0; n < nameWords.length; n++)
+        if (nameWords[n].indexOf(word) === 0) prefixHits++
+    }
+    if (!all) continue
+
+    matches.push({
+      icaoId: String(entry.icaoId).toUpperCase(),
+      name: String(entry.name || ""),
+      // More words matched at a word start means a better name match; the
+      // distance the caller already knows is not recomputed here.
+      score: prefixHits,
+      latitude: numberOrNull(entry.lat),
+      longitude: numberOrNull(entry.lon)
+    })
+  }
+
+  matches.sort(function (a, b) {
+    if (a.score !== b.score) return b.score - a.score
+    return a.icaoId < b.icaoId ? -1 : (a.icaoId > b.icaoId ? 1 : 0)
+  })
+  return matches.slice(0, cap)
+}
+
+// One earlier observation on one line, for the trend list: the numbers a
+// pilot compares between two reports, in the order the report reads them.
+function formatObservationLine(parsed, units) {
+  if (!parsed) return ""
+  var useUnits = units === undefined || units === null ? "metric" : units
+  var parts = []
+
+  var speed = numberOrNull(parsed.wind && parsed.wind.speedKt)
+  if (speed === null) parts.push("wind —")
+  else if (speed === 0) parts.push("calm")
+  else {
+    var dir = numberOrNull(parsed.wind.dir)
+    var text = (parsed.wind.variableDir === true || dir === null ? "VRB" : pad3(dir) + "°")
+      + " " + Math.round(speed) + " kt"
+    var gust = numberOrNull(parsed.wind.gustKt)
+    if (gust !== null) text += "G" + Math.round(gust)
+    parts.push(text)
+  }
+
+  var temp = numberOrNull(parsed.tempC)
+  var dewp = numberOrNull(parsed.dewpC)
+  if (temp !== null || dewp !== null) parts.push(formatTemp(temp, useUnits) + "/" + formatTemp(dewp, useUnits))
+
+  if (numberOrNull(parsed.qnhHpa) !== null) parts.push(formatAltimeter(parsed.qnhHpa, useUnits))
+  if (parsed.visibility && numberOrNull(parsed.visibility.meters) !== null)
+    parts.push(formatVisibility(parsed.visibility, useUnits))
+
+  return parts.join(" · ")
+}
+
 // Project the forecast onto a pixel frise. Prevailing conditions are swept as
 // events (base, FM, BECMG) so the bands tile the whole validity window with no
 // gaps; TEMPO and PROB groups come back flagged as overlays, because they
@@ -1033,10 +1207,16 @@ if (typeof module !== "undefined") {
     resolveDayHour: resolveDayHour,
     parseTaf: parseTaf,
     isOverlayPeriod: isOverlayPeriod,
+    currentTafPeriod: currentTafPeriod,
+    metarHistory: metarHistory,
+    formatObservationLine: formatObservationLine,
+    describeTafPeriods: describeTafPeriods,
     tafTimeline: tafTimeline,
     timelineTicks: timelineTicks,
     haversineKm: haversineKm,
     nearestReportingStation: nearestReportingStation,
+    normalizePlaceName: normalizePlaceName,
+    matchStationsByName: matchStationsByName,
     crosswindComponents: crosswindComponents,
     isUnknownStation: isUnknownStation
   }

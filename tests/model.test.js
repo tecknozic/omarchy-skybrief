@@ -302,6 +302,174 @@ test("parseTaf keeps PROB/TEMPO groups as overlays", function () {
   assert.equal(prevailing[0].category, "VFR")
 })
 
+test("currentTafPeriod names the prevailing group in force, never an overlay", function () {
+  var taf = Model.parseTaf({
+    icaoId: "KJFK",
+    rawTAF: "TAF KJFK 220529Z 2206/2312 06009KT P6SM VCSH OVC050 FM221500 04014G24KT P6SM OVC070 FM230200 03014G20KT P6SM SCT100",
+    validTimeFrom: 1790056800,
+    validTimeTo: 1790164800
+  })
+
+  // Before the first FM: the base group holds.
+  assert.equal(Model.currentTafPeriod(taf.periods, Date.UTC(2026, 8, 22, 8) ).category, "VFR")
+  // Inside the second group's window.
+  var second = Model.currentTafPeriod(taf.periods, Date.UTC(2026, 8, 22, 16))
+  assert.equal(second.change, "FM")
+  assert.equal(second.wspd, 14)
+  // Past the last group's opening, that group governs to the end of validity.
+  var third = Model.currentTafPeriod(taf.periods, Date.UTC(2026, 8, 23, 6))
+  assert.equal(third.change, "FM")
+  assert.equal(third.wspd, 14)
+  // Outside the validity window there is no current group at all.
+  assert.equal(Model.currentTafPeriod(taf.periods, Date.UTC(2026, 8, 21, 0)), null)
+
+  // An overlay in force does not become the current group: it qualifies the
+  // prevailing conditions rather than replacing them.
+  var prob = Model.parseTaf({
+    icaoId: "EGLL",
+    rawTAF: "TAF EGLL 220454Z 2206/2312 VRB03KT 9999 SCT035 PROB30 TEMPO 2210/2212 28015G25KT 6000 SHRA",
+    validTimeFrom: 1790056800,
+    validTimeTo: 1790164800
+  })
+  var inTempo = Model.currentTafPeriod(prob.periods, Date.UTC(2026, 8, 22, 11))
+  assert.equal(Model.isOverlayPeriod(inTempo), false)
+  assert.equal(inTempo.wspd, 3)
+})
+
+test("metarHistory returns strict earlier observations, newest first", function () {
+  var entries = [
+    { icaoId: "LFRN", obsTime: 1790087400, rawOb: "METAR LFRN 221430Z 05006KT CAVOK 27/06 Q1026" },
+    { icaoId: "LFRN", obsTime: 1790085600, rawOb: "METAR LFRN 221400Z 05008KT CAVOK 26/06 Q1026" },
+    { icaoId: "LFRN", obsTime: 1790083800, rawOb: "METAR LFRN 221330Z 09005KT CAVOK 26/08 Q1026" },
+    { icaoId: "LFRN", obsTime: 1790082000, rawOb: "METAR LFRN 221300Z 04007KT CAVOK 26/08 Q1027" }
+  ]
+  var history = Model.metarHistory(entries, 1790087400000, 3)
+  assert.equal(history.length, 3)
+  // The observation already on screen is not repeated as "history".
+  assert.equal(history[0].obsTime, 1790085600000)
+  assert.equal(history[2].obsTime, 1790082000000)
+  assert.equal(Model.metarHistory(entries, 1790087400000, 1).length, 1)
+  // Entries with no timestamp cannot be ordered and are dropped.
+  assert.deepEqual(Model.metarHistory([{ icaoId: "LFRN" }], 1790087400000, 3), [])
+  assert.deepEqual(Model.metarHistory(null, 1790087400000, 3), [])
+})
+
+test("normalizePlaceName folds accents, case and punctuation", function () {
+  assert.equal(Model.normalizePlaceName("Rennes/St Jacques Arpt"), "rennes st jacques arpt")
+  assert.equal(Model.normalizePlaceName("  NANTES-Atlantique  "), "nantes atlantique")
+  assert.equal(Model.normalizePlaceName("Saint-Brieuc/Armor"), "saint brieuc armor")
+  // An accented query has to fold to the same form as the ASCII station name.
+  assert.equal(Model.normalizePlaceName("Brest-Guipavas"), Model.normalizePlaceName("Brest Guipavas"))
+  assert.equal(Model.normalizePlaceName("Brést"), Model.normalizePlaceName("brest"))
+  assert.equal(Model.normalizePlaceName(null), "")
+})
+
+test("matchStationsByName requires every query word and ranks word starts", function () {
+  var entries = [
+    { icaoId: "LFRS", name: "Nantes/Atlantique Arpt" },
+    { icaoId: "LFOV", name: "Laval/Entrammes Arpt" },
+    { icaoId: "LFRN", name: "Rennes/St Jacques Arpt" },
+    { icaoId: "LFBO", name: "Toulouse/Blagnac" },
+    { icaoId: "LFPG", name: "Paris/Charles de Gaulle" },
+    { name: "Jersey 5S" }
+  ]
+
+  // One word: only the stations whose name contains it.
+  var nantes = Model.matchStationsByName(entries, "nantes", 8)
+  assert.deepEqual(nantes.map(function (s) { return s.icaoId }), ["LFRS"])
+
+  // Case and accents do not matter.
+  assert.deepEqual(Model.matchStationsByName(entries, "RENNES", 8).map(function (s) { return s.icaoId }), ["LFRN"])
+
+  // Two words must both appear, which is what makes a long name usable.
+  assert.deepEqual(Model.matchStationsByName(entries, "charles gaulle", 8).map(function (s) { return s.icaoId }), ["LFPG"])
+  // ... and the wrong order still works, because matching is per word.
+  assert.deepEqual(Model.matchStationsByName(entries, "gaulle charles", 8).map(function (s) { return s.icaoId }), ["LFPG"])
+
+  // A word that matches nothing returns nothing rather than the whole list.
+  assert.deepEqual(Model.matchStationsByName(entries, "nantes laval", 8), [])
+
+  // Entries with no ICAO code are never a station to select.
+  assert.deepEqual(Model.matchStationsByName(entries, "jersey", 8), [])
+
+  // Word-start matches rank above mid-word matches. "st" opens a word in
+  // "St Jacques" but not in "Brest".
+  var ranked = Model.matchStationsByName([
+    { icaoId: "LFRB", name: "Brest/Guipavas" },
+    { icaoId: "LFRN", name: "Rennes/St Jacques Arpt" }
+  ], "st", 8)
+  assert.deepEqual(ranked.map(function (s) { return s.icaoId }), ["LFRN", "LFRB"])
+
+  assert.equal(Model.matchStationsByName(entries, "nantes", 8)[0].score, 1)
+  assert.deepEqual(Model.matchStationsByName(entries, "", 8), [])
+  assert.deepEqual(Model.matchStationsByName(null, "nantes", 8), [])
+})
+
+test("formatObservationLine reads one report as one comparison line", function () {
+  var entries = [
+    { icaoId: "LFRN", obsTime: 1790087400, temp: 27, dewp: 6, altim: 1026, wdir: 50, wspd: 6, visib: "6+",
+      rawOb: "METAR LFRN 221430Z 05006KT 360V100 CAVOK 27/06 Q1026 NOSIG" },
+    { icaoId: "LFRN", obsTime: 1790085600, temp: 26, dewp: 6, altim: 1026, wdir: 50, wspd: 8, visib: "6+",
+      rawOb: "METAR LFRN 221400Z 05008KT CAVOK 26/06 Q1026" }
+  ]
+  var history = Model.metarHistory(entries, 1790087400000, 3)
+  assert.equal(Model.formatObservationLine(history[0], "metric"), "050° 8 kt · 26 °C/6 °C · 1026 hPa · 10 km or more")
+
+  // Wind that did not report, and a gust: both stay readable on one line.
+  var gusty = Model.parseMetar({
+    icaoId: "KJFK", obsTime: 1790087400,
+    rawOb: "METAR KJFK 221430Z 04014G24KT 10SM BKN020 18/12 A2992",
+    temp: 18, dewp: 12, altim: 1013
+  })
+  // 18 °C is 64 °F, 1013 hPa (the JSON side of A2992) is 29.91 inHg, and 10 SM
+  // is past the 6 sm the display calls unlimited. The wind stays in knots in
+  // both unit systems, as it is spoken.
+  assert.equal(Model.formatObservationLine(gusty, "imperial"),
+    "040° 14 ktG24 · 64 °F/54 °F · 29.91 inHg · 6+ sm")
+  assert.equal(Model.formatObservationLine(gusty, "metric"),
+    "040° 14 ktG24 · 18 °C/12 °C · 1013 hPa · 10 km or more")
+  assert.equal(Model.formatObservationLine(null, "metric"), "")
+})
+
+test("describeTafPeriods marks the group in force and splits heading from body", function () {
+  var taf = Model.parseTaf({
+    icaoId: "KJFK",
+    rawTAF: "TAF KJFK 220529Z 2206/2312 06009KT P6SM VCSH OVC050 FM221500 04014G24KT P6SM OVC070 FM230200 03014G20KT P6SM SCT100",
+    validTimeFrom: 1790056800,
+    validTimeTo: 1790164800
+  })
+  var now = Date.UTC(2026, 8, 22, 16)
+  var lines = Model.describeTafPeriods(taf, "metric", "utc", now)
+
+  assert.equal(lines.length, 3)
+  // Exactly one line is "the one that applies now", and it is the second group.
+  assert.equal(lines.filter(function (l) { return l.current }).length, 1)
+  assert.equal(lines[1].current, true)
+  assert.equal(lines[0].current, false)
+
+  // The heading carries the window; the body carries the conditions.
+  assert.ok(lines[1].header.indexOf("–") !== -1)
+  assert.ok(lines[1].header.indexOf("FM") !== -1)
+  assert.equal(lines[1].detail, "VFR, 040° 14 kt gusting 24, visibility 10 km or more")
+
+  // An overlay is flagged as one, so the view can indent it under the group it
+  // qualifies rather than presenting it as a separate forecast.
+  var prob = Model.parseTaf({
+    icaoId: "EGLL",
+    rawTAF: "TAF EGLL 220454Z 2206/2312 VRB03KT 9999 SCT035 PROB30 TEMPO 2308/2310 28015G25KT 3000 SHRA",
+    validTimeFrom: 1790056800,
+    validTimeTo: 1790164800
+  })
+  var overlayLines = Model.describeTafPeriods(prob, "metric", "utc", Date.UTC(2026, 8, 22, 11))
+  assert.equal(overlayLines.length, 2)
+  assert.equal(overlayLines[1].overlay, true)
+  assert.equal(overlayLines[1].current, false)
+  assert.ok(overlayLines[1].header.indexOf("PROB30") !== -1)
+  assert.ok(overlayLines[1].header.indexOf("TEMPO") !== -1)
+
+  assert.deepEqual(Model.describeTafPeriods(null, "metric", "utc", now), [])
+})
+
 test("tafTimeline tiles the validity window and marks overlays", function () {
   var taf = Model.parseTaf({
     icaoId: "KJFK",

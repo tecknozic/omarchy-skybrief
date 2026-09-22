@@ -39,6 +39,10 @@ Panel {
     : null
 
   property bool expanded: false
+  // The trend starts folded: the current observation is what the panel is for,
+  // and three earlier ones above the forecast would push it off the first
+  // screenful. The choice does not persist — it is a glance, not a preference.
+  property bool trendOpen: false
   property string credentialUser: ""
   property string credentialPassword: ""
   property string copyNote: ""
@@ -93,27 +97,22 @@ Panel {
 
   readonly property string heroTitle: station !== "" ? station : "SkyBrief"
 
-  // The forecast is read twice — once as its own section, once inside the
-  // detail view it no longer appears in — so the text is built in one place.
-  readonly property string tafText: {
-    if (!root.taf) return ""
-    if (root.showRaw) return root.taf.raw
+  // The observation has no single "current group" to highlight, so its trend is
+  // read from the stored earlier observations instead.
+  readonly property var history: root.service ? root.service.historyFor(root.station) : []
 
-    var text = "Valid " + Model.formatObsTime(root.taf.validTimeFrom, timeFormat)
-      + " to " + Model.formatObsTime(root.taf.validTimeTo, timeFormat) + "."
-    for (var i = 0; i < root.taf.periods.length; i++) {
-      var period = root.taf.periods[i]
-      var header = Model.formatObsTime(period.timeFrom, timeFormat)
-        + (period.change ? " " + period.change : "")
-        + (period.probability !== null && period.probability !== undefined ? " PROB" + period.probability : "")
-      text += "\n" + header + " — " + (period.category || "—")
-        + (period.wspd !== null ? ", " + (period.wdir === "VRB" ? "variable" : period.wdir + "°") + " " + period.wspd + " kt" : "")
-        + (period.wgst !== null ? " gusting " + period.wgst : "")
-        + (period.visibility && period.visibility.meters !== null
-          ? ", visibility " + Model.formatVisibility(period.visibility, units) : "")
-    }
-    return text
-  }
+  // Name-search state, straight from the service so a re-open shows whatever
+  // the last search found rather than an empty box.
+  readonly property var searchResults: root.service && Array.isArray(root.service.searchResults)
+    ? root.service.searchResults : []
+  readonly property string searchError: root.service ? String(root.service.searchError || "") : ""
+  readonly property bool searchPending: root.service ? root.service.searchPending === true : false
+
+  // The forecast, group by group when decoded: reading it back as one paragraph
+  // hides which group is in force, which is the thing a decoded TAF is for.
+  readonly property var tafLines: root.taf
+    ? Model.describeTafPeriods(root.taf, units, timeFormat, Date.now())
+    : []
 
   readonly property string heroMeta: {
     if (!report) return status === "offline" ? "OFFLINE" : "NO REPORT"
@@ -142,11 +141,14 @@ Panel {
   function resetSearch() {
     root.listNote = ""
     if (searchField) searchField.text = ""
+    if (root.service) root.service.clearSearch()
   }
 
   function close() {
     root.copyNote = ""
     root.expandedNotam = ""
+    root.expanded = false
+    root.trendOpen = false
     resetSearch()
     root.controller.hide()
   }
@@ -172,6 +174,31 @@ Panel {
     var changes = {}
     changes[key] = value
     writeSettings(changes)
+  }
+
+  // One entry point for the field and the add button. A four-character code is
+  // an ICAO code, and is both listed and made the favourite; anything else is
+  // treated as a place name and opens a shortlist, because a place name can be
+  // several airfields and only the user knows which one they meant.
+  function submitQuery(raw) {
+    var text = String(raw === null || raw === undefined ? "" : raw).trim()
+    if (/^[A-Za-z0-9]{4}$/.test(text)) {
+      root.submitStation(text)
+      return
+    }
+    if (root.service) root.service.searchByName(text)
+  }
+
+  // Picking a candidate is what makes it the favourite; adding it to the quick
+  // list is a bonus that must not be able to block the choice — a full list
+  // still lets the station be selected.
+  function chooseSearchResult(icao) {
+    var code = String(icao || "").trim().toUpperCase()
+    if (!/^[A-Z0-9]{4}$/.test(code)) return
+    root.chooseStation(code)
+    root.addToQuickList(code)
+    if (root.service) root.service.clearSearch()
+    searchField.text = ""
   }
 
   // One entry point for the field and the add button. A code that is a valid
@@ -478,6 +505,84 @@ Panel {
             font.pixelSize: Style.font.body
           }
 
+          // ---- trend -----------------------------------------------------
+
+          // Earlier observations of the same station: one METAR says what is
+          // happening, three say which way it is going. Folded away by default
+          // so the current report stays the first thing read, and shown at all
+          // only when the station actually has a past in the response.
+          Column {
+            visible: root.history.length > 0
+            width: parent.width
+            spacing: Style.space(4)
+
+            // A bare label when collapsed, a clickable row when there is
+            // something to unfold: an affordance that does nothing is worse
+            // than none. The click area is a sibling of the labels, not a child
+            // of the Row — an anchored child disables the Row's own layout.
+            Item {
+              width: parent.width
+              height: trendHeader.implicitHeight
+
+              Row {
+                id: trendHeader
+                spacing: Style.space(6)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: "TREND · " + root.history.length + " earlier"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.trendOpen ? "󰅃" : "󰅀"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.trendOpen = !root.trendOpen
+              }
+            }
+
+            Repeater {
+              model: root.trendOpen ? root.history : []
+
+              Row {
+                required property var modelData
+                width: parent.width
+                spacing: Style.space(8)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: Model.formatObsTime(modelData.obsTime, root.timeFormat)
+                  width: Style.space(46)
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: Model.formatObservationLine(modelData, root.units)
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+          }
+
           // ---- TAF -------------------------------------------------------
 
           // The forecast is shown by default, right under the observation it
@@ -514,16 +619,82 @@ Panel {
           }
 
           // The raw forecast is one line of coded groups; the decoded one is the
-          // same forecast spelled out period by period.
+          // same forecast spelled out period by period, with the group in force
+          // marked so it can be found without comparing five clock ranges.
           Text {
-            visible: root.taf !== null
+            visible: root.taf !== null && root.showRaw
             width: parent.width
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
-            text: root.tafText
+            text: root.taf ? root.taf.raw : ""
             color: root.foreground
-            font.family: root.showRaw ? Style.font.family : root.fontFamily
-            font.pixelSize: root.showRaw ? Style.font.bodySmall : Style.font.body
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Column {
+            visible: root.taf !== null && !root.showRaw
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              model: root.tafLines
+
+              Column {
+                required property var modelData
+                width: parent.width
+                spacing: Style.space(1)
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  // The marker is a bar in the category colour, the same code
+                  // the frise above uses, plus the word for the group in force:
+                  // colour alone would not survive a colour-blind reader.
+                  Rectangle {
+                    width: Style.space(3)
+                    height: parent.height
+                    color: modelData.overlay
+                      ? "transparent"
+                      : root.tafLineColor(modelData)
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: modelData.header
+                    color: modelData.current ? root.foreground : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: modelData.current
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    visible: modelData.current
+                    textFormat: Text.PlainText
+                    text: "NOW"
+                    color: root.categoryColor
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+
+                Text {
+                  width: parent.width
+                  textFormat: Text.PlainText
+                  wrapMode: Text.Wrap
+                  text: modelData.detail
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  leftPadding: Style.space(9)
+                }
+              }
+            }
           }
 
           Canvas {
@@ -740,6 +911,10 @@ Panel {
 
           // ---- search ----------------------------------------------------
 
+          // One field for both ways of naming a field: a four-character code is
+          // an ICAO code and goes straight in, anything else is a place name
+          // and opens a shortlist to choose from. A name can cover several
+          // airfields, so it never switches the favourite on its own.
           Row {
             width: parent.width
             spacing: Style.space(8)
@@ -747,18 +922,109 @@ Panel {
             TextField {
               id: searchField
               width: parent.width - addButton.width - parent.spacing
-              placeholderText: "ICAO code"
+              placeholderText: "ICAO code or place name"
               foreground: root.foreground
               font.family: root.fontFamily
-              onAccepted: root.submitStation(text)
+              onAccepted: root.submitQuery(text)
             }
 
             PanelActionButton {
               id: addButton
               iconText: "󰐕"
-              tooltipText: "Add to the quick list and use it"
+              tooltipText: "Use this code, or search this name"
               foreground: root.foreground
-              onClicked: root.submitStation(searchField.text)
+              onClicked: root.submitQuery(searchField.text)
+            }
+          }
+
+          // The shortlist. Rows are the same cursor surface as the quick list,
+          // for the same reason: a code, a name and a distance do not fit in a
+          // Button's fixed two-part content.
+          Column {
+            width: parent.width
+            spacing: Style.space(2)
+            visible: root.searchResults.length > 0 || root.searchError !== "" || root.searchPending
+
+            Text {
+              visible: root.searchPending
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Searching…"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Text {
+              visible: !root.searchPending && root.searchError !== ""
+              width: parent.width
+              textFormat: Text.PlainText
+              wrapMode: Text.Wrap
+              text: root.searchError
+              color: Color.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Repeater {
+              model: root.searchResults
+
+              Row {
+                id: resultRow
+                required property var modelData
+                width: parent.width
+                height: resultSurface.height
+
+                CursorSurface {
+                  id: resultSurface
+                  property bool hovered: false
+                  readonly property var hoverSpec: Border.controlSpec("hover-cursor", root.foreground, Color.accent)
+
+                  hasCursor: hovered
+                  foreground: root.foreground
+                  width: parent.width
+                  height: Math.max(Style.space(22),
+                    resultContent.implicitHeight + Style.spacing.controlPaddingY * 2
+                      + Border.top(hoverSpec) + Border.bottom(hoverSpec))
+
+                  HoverHandler {
+                    onHoveredChanged: resultSurface.hovered = hovered
+                  }
+
+                  Row {
+                    id: resultContent
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.spacing.controlPaddingX
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: resultRow.modelData.icaoId
+                      width: Style.space(46)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: resultRow.modelData.name
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.chooseSearchResult(resultRow.modelData.icaoId)
+                  }
+                }
+              }
             }
           }
 
@@ -1220,6 +1486,13 @@ Panel {
   // aviation colour, and the age of the observation. The category word rather
   // than the single letter, because the colour now carries the code and a
   // letter beside a coloured word would be the same information twice.
+  // The bar beside a decoded TAF group carries the group's own category, so a
+  // deteriorating forecast reads as the same colours the frise and the pill use.
+  function tafLineColor(line) {
+    var role = Model.categoryColorRole(line ? line.category : "")
+    return root.categoryColors[role] !== undefined ? root.categoryColors[role] : root.dim
+  }
+
   function quickCategory(code) {
     if (!root.service) return ""
     var report = root.service.reportFor(code)

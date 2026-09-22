@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 — 2026-09-22
+
+- Enforce the response size cap while the body is being received, not after it
+  has been buffered. Each request now pipes curl into `head -c 524288`, so an
+  endpoint cannot make the shell hold an unbounded response. Raised in the
+  marketplace review: the previous check ran on already-collected text, which
+  was too late to protect memory. An oversized response now reports itself as
+  such instead of looking like a network failure.
+
 ## 0.3.0 — 2026-09-22
 
 - Search by place name as well as by ICAO code. A name is geocoded, the

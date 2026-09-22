@@ -17,6 +17,13 @@ import "Autorouter.js" as Autorouter
 //     inherited PATH;
 //   * the autorouter client secret is written on a child's stdin, never in
 //     argv, where `ps` and the shell history would both show it.
+//
+// A third rule, from the marketplace review: the response size cap is enforced
+// WHILE the body arrives, not after. Every network request goes through
+// requestCommand(), which pipes curl into `head -c maxResponseBytes`, so an
+// endpoint cannot make the shell buffer an unbounded body before any check
+// runs. A collector that receives the whole body first and then compares its
+// length is too late — the memory has already been spent.
 Item {
   id: root
 
@@ -416,9 +423,45 @@ Item {
     notams = ({ forStation: [], forFir: [] })
   }
 
+  // Every network request is bounded while its body is being received.
+  //
+  // `head -c` closes the pipe the moment the cap is reached, so curl's write
+  // fails and it exits 23 instead of buffering an unbounded body — the memory
+  // is never spent. `pipefail` makes that 23 (or curl's own 6/22/28) the exit
+  // status of the whole pipeline rather than head's success. `--` ends curl's
+  // options so a URL can never be read as a flag, and the URL is passed as a
+  // positional argument, never interpolated into the shell string.
+  readonly property int curlOverflowExitCode: 23
+
   function requestCommand(url) {
-    return ["/usr/bin/timeout", String(processTimeoutSec), "/usr/bin/curl",
-      "-fsS", "--max-time", String(requestTimeoutSec), url]
+    return ["/usr/bin/bash", "-o", "pipefail", "-c",
+      "/usr/bin/timeout \"$1\" /usr/bin/curl -fsS --max-time \"$2\" -- \"$3\""
+        + " | /usr/bin/head -c \"$4\"",
+      "skybrief-request",
+      String(processTimeoutSec), String(requestTimeoutSec), String(url), String(maxResponseBytes)]
+  }
+
+  // The same pipeline for the requests that carry their configuration on stdin
+  // (autorouter's OAuth token and NOTAM queries), where the credentials must
+  // not appear in argv. `-K -` reads that config, and the child's stdin is
+  // still forwarded through the shell untouched.
+  function stdinRequestCommand() {
+    return ["/usr/bin/bash", "-o", "pipefail", "-c",
+      "/usr/bin/timeout \"$1\" /usr/bin/curl -fsS --fail-with-body --max-time \"$2\" -K -"
+        + " | /usr/bin/head -c \"$3\"",
+      "skybrief-request",
+      String(processTimeoutSec), String(requestTimeoutSec), String(maxResponseBytes)]
+  }
+
+  // A body that hit the cap is not a network failure and must read as its own
+  // thing: "too large to use" is actionable, "unreachable" is not.
+  function isOverflowExit(code) {
+    return code === curlOverflowExitCode
+  }
+
+  function overflowMessage(kind) {
+    return kind + ": response exceeded " + Math.round(maxResponseBytes / 1024)
+      + " KiB and was cut off"
   }
 
   function parseEntries(raw) {
@@ -628,8 +671,9 @@ Item {
     // --fail-with-body, not plain --fail: autorouter answers an invalid client
     // with HTTP 403 and a JSON body naming the reason. Plain --fail would throw
     // that body away and leave the user with "exit 22", which says nothing.
-    command: ["/usr/bin/timeout", String(root.processTimeoutSec), "/usr/bin/curl",
-      "-fsS", "--fail-with-body", "--max-time", String(root.requestTimeoutSec), "-K", "-"]
+    // The body still goes through the bounded pipeline, so the reason is
+    // readable but cannot grow without limit.
+    command: root.stdinRequestCommand()
     clearEnvironment: true
     stdinEnabled: true
     running: false
@@ -637,7 +681,6 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         if (tokenProc.generation !== root.generation) return
-        if (String(text || "").length > root.maxResponseBytes) return
         var parsed = Autorouter.parseTokenResponse(text)
         if (parsed.error || !parsed.token) {
           tokenProc.reported = true
@@ -662,7 +705,9 @@ Item {
       if (tokenProc.reported) return
       if (code === 0) return
       root.notamPending = false
-      root.notamError = "autorouter is unreachable (curl exit " + code + ")"
+      root.notamError = root.isOverflowExit(code)
+        ? root.overflowMessage("autorouter sign-in")
+        : "autorouter is unreachable (curl exit " + code + ")"
     }
   }
 
@@ -673,8 +718,7 @@ Item {
     property string requestedIcao: ""
     property string requestedFir: ""
     property bool reported: false
-    command: ["/usr/bin/timeout", String(root.processTimeoutSec), "/usr/bin/curl",
-      "-fsS", "--fail-with-body", "--max-time", String(root.requestTimeoutSec), "-K", "-"]
+    command: root.stdinRequestCommand()
     clearEnvironment: true
     stdinEnabled: true
     running: false
@@ -683,7 +727,6 @@ Item {
       onStreamFinished: {
         if (notamProc.generation !== root.generation) return
         root.notamPending = false
-        if (String(text || "").length > root.maxResponseBytes) return
         var parsed = Autorouter.parseNotamResponse(text)
         if (parsed.error) {
           notamProc.reported = true
@@ -714,7 +757,9 @@ Item {
       if (notamProc.reported) return
       if (code === 0) return
       root.notamPending = false
-      root.notamError = "NOTAM query failed (curl exit " + code + ")"
+      root.notamError = root.isOverflowExit(code)
+        ? root.overflowMessage("NOTAM query")
+        : "NOTAM query failed (curl exit " + code + ")"
     }
   }
 
@@ -725,6 +770,10 @@ Item {
     // errors are all exit codes here, and a bare number would say nothing.
     var detail = String(streamText || "").trim()
     if (detail.length > 200) detail = detail.slice(0, 200)
+    // An oversized body is not a reachability problem: the endpoint answered,
+    // the answer was simply unusable, and saying so is more actionable than
+    // reporting curl's pipe code.
+    if (isOverflowExit(code)) detail = overflowMessage(kind).replace(kind + ": ", "")
     if (detail === "") detail = "exit " + code
     lastError = kind + ": " + detail
     status = "offline"
@@ -741,7 +790,6 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text || "").length > root.maxResponseBytes) return
         root.commitMetar(text, metarProc.generation)
       }
     }
@@ -763,15 +811,16 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text || "").length > root.maxResponseBytes) return
         root.commitTaf(text, tafProc.generation)
       }
     }
     onExited: function(code) {
       // A missing TAF leaves the METAR view intact: it is a secondary product,
       // so its failure is recorded without demoting the station status.
-      if (code !== 0 && tafProc.generation === root.generation && root.status === "ready")
-        root.lastError = "TAF unavailable (exit " + code + ")"
+      if (code === 0 || tafProc.generation !== root.generation || root.status !== "ready") return
+      root.lastError = root.isOverflowExit(code)
+        ? root.overflowMessage("TAF unavailable")
+        : "TAF unavailable (exit " + code + ")"
     }
   }
 
@@ -784,7 +833,6 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text || "").length > root.maxResponseBytes) return
         root.commitSigmet(text, sigmetProc.generation)
       }
     }
@@ -792,7 +840,9 @@ Item {
     // the station down with it: the section reports its own error.
     onExited: function(code) {
       if (code !== 0 && sigmetProc.generation === root.generation)
-        root.sigmetError = "SIGMET feed unavailable (exit " + code + ")"
+        root.sigmetError = root.isOverflowExit(code)
+          ? root.overflowMessage("SIGMET feed")
+          : "SIGMET feed unavailable (exit " + code + ")"
       else if (code === 0)
         root.sigmetError = ""
     }
@@ -811,7 +861,6 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text || "").length > root.maxResponseBytes) return
         if (nearestProc.generation !== root.generation) return
         var entries = root.parseEntries(text)
         var nearest = Model.nearestReportingStation(entries, nearestProc.originLat, nearestProc.originLon)
@@ -840,7 +889,6 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text || "").length > root.maxResponseBytes) return
         if (geocodeProc.generation !== root.generation) return
         var latitude = NaN
         var longitude = NaN
@@ -927,7 +975,6 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text || "").length > root.maxResponseBytes) return
         if (searchProc.generation !== root.generation) return
         var entries = root.parseEntries(text)
         var matches = Model.matchStationsByName(entries, searchProc.query, maxSearchResults)
@@ -942,7 +989,9 @@ Item {
       if (code === 0) return
       if (searchProc.generation !== root.generation) return
       root.searchPending = false
-      root.searchError = "Station search failed."
+      root.searchError = root.isOverflowExit(code)
+        ? root.overflowMessage("Station search")
+        : "Station search failed."
     }
   }
 
@@ -957,7 +1006,6 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text || "").length > root.maxResponseBytes) return
         var entries = root.parseEntries(text)
         if (!entries.length) return
         var next = ({})
@@ -983,7 +1031,6 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text || "").length > root.maxResponseBytes) return
         var entries = root.parseEntries(text)
         if (!entries.length) return
         var runways = []

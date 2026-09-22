@@ -152,11 +152,19 @@ rm -f ~/.local/state/omarchy/skybrief/autorouter.json
 - Every network child runs with `clearEnvironment: true`.
 - Only the notification child gets an environment, and only the two variables
   D-Bus needs.
-- Report size is capped before parsing, so a misbehaving endpoint cannot fill
-  memory: `--max-filesize` does not apply to a response without
-  `Content-Length`.
+- Every response is capped **while it arrives**, not after: each request pipes
+  curl into `head -c 524288`, so the moment the cap is reached the pipe closes,
+  curl's write fails, and it exits 23 — the shell never buffers an unbounded
+  body. `pipefail` makes that 23 (or curl's own 6/22/28) the status of the whole
+  pipeline. `--max-filesize` was not usable here: it does not apply to a
+  response without `Content-Length`. An overflow is reported as its own error
+  ("response exceeded 512 KiB and was cut off"), not as an unreachable endpoint.
+- The URL is passed to the shell as a positional argument and preceded by `--`,
+  never interpolated into the command string, so it cannot be read as a flag or
+  a shell word.
 - The plugin ships no executable, runs no installer, and never pipes a download
-  into a shell.
+  into a shell. The one shell in use is `/usr/bin/bash -o pipefail -c` with a
+  fixed command string, and its only variable parts are positional arguments.
 
 ## Development
 

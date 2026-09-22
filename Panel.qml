@@ -188,6 +188,32 @@ Panel {
         if (dx !== 0) scroll.contentY = Math.max(0, Math.min(scroll.contentHeight - scroll.height,
           scroll.contentY + dx * step))
       }
+      // Tab walks the text fields the visible view actually offers. Without
+      // this the catcher (Keys.BeforeItem) consumes Tab, no field can ever take
+      // focus, and `blocked` above would be dead logic.
+      onTabRequested: function(direction) {
+        var fields = root.expanded
+          ? [root.hasCredentials ? null : userField, root.hasCredentials ? null : passwordField]
+          : [searchField]
+        var available = []
+        for (var i = 0; i < fields.length; i++)
+          if (fields[i] && fields[i].visible) available.push(fields[i])
+        if (!available.length) return
+
+        var current = -1
+        for (var j = 0; j < available.length; j++)
+          if (available[j].activeFocus) current = j
+
+        if (direction > 0) {
+          if (current === available.length - 1 || current === -1) {
+            if (current === -1) available[0].forceActiveFocus()
+            else keyCatcher.forceActiveFocus()
+          } else available[current + 1].forceActiveFocus()
+        } else {
+          if (current <= 0) keyCatcher.forceActiveFocus()
+          else available[current - 1].forceActiveFocus()
+        }
+      }
 
       Flickable {
         id: scroll

@@ -10,9 +10,10 @@ glance, decoded or raw, with optional NOTAMs.
 
 ## What it shows
 
-![SkyBrief's popup on EGKK: the VFR pill, the raw METAR, the folded TREND line,
-the TAF with its category timeline and colour legend, the quick list with each
-station's category and age, and the search field](preview.png)
+![SkyBrief's popup open on the desktop: the VFR pill on the bar, the raw METAR
+for EIDW, the folded TREND line, the TAF with its category timeline and colour
+legend, the quick list with each station's category and age, and the search
+field](preview.png)
 
 A one-letter pill in the bar, one letter per flight category:
 

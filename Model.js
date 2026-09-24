@@ -626,37 +626,120 @@ function resolveDayHour(day, hour, minute, referenceMs) {
   return candidate
 }
 
+// The conditions a group's own tokens state, and which elements it states at
+// all. A change group carries only the elements that change, so "which elements
+// are here" is as much a part of the group as their values — see
+// resolveTafConditions for what the omissions mean.
 function conditionsFromTokens(tokens) {
   var wind = { wdir: null, wspd: null, wgst: null }
   var visibility = { meters: null, raw: "" }
   var weather = []
+  var stated = { wind: false, visibility: false, clouds: false, weather: false }
 
   for (var i = 0; i < tokens.length; i++) {
     var token = tokens[i]
+    if (token === "CAVOK") {
+      // CAVOK is one statement about three elements at once: 10 km or more of
+      // visibility, no cloud below 5000 ft, no significant weather.
+      visibility = { meters: UNLIMITED_METERS, raw: "CAVOK" }
+      stated.visibility = true
+      stated.clouds = true
+      stated.weather = true
+      continue
+    }
     var m = WIND_RE.exec(token)
     if (m) {
       wind.wdir = m[1] === "VRB" ? "VRB" : Number(m[1])
       wind.wspd = Number(m[2])
       wind.wgst = m[3] ? Number(m[3]) : null
+      stated.wind = true
       continue
     }
     if (visibility.meters === null) {
       var v = matchVisibilityToken(token)
-      if (v) { visibility = v; continue }
+      if (v) { visibility = v; stated.visibility = true; continue }
     }
-    if (isWeatherToken(token) && token !== "NSW") weather.push(token)
+    if (isWeatherToken(token)) {
+      // NSW is a stated value — "nothing significant" — not an omission, so it
+      // clears the weather carried over instead of leaving it standing.
+      stated.weather = true
+      if (token !== "NSW") weather.push(token)
+    }
   }
 
+  // NSC/SKC/CLR/NCD come back as layers and state the sky as firmly as a BKN
+  // layer does.
   var clouds = parseCloudsFromText(tokens)
-  var category = classifyFlightCategory({ clouds: clouds, visibility: visibility })
+  if (clouds.length) stated.clouds = true
 
   return {
     wind: wind,
     visibility: visibility,
     clouds: clouds,
     weather: weather,
-    category: category
+    stated: stated,
+    category: classifyFlightCategory({ clouds: clouds, visibility: visibility })
   }
+}
+
+// What a group leaves out, filled in from the group in force before it. The
+// AIM says it plainly: of the change groups, "with the exception of a FM group
+// the new time period will include only those elements which are expected to
+// change", and of a BECMG, "only the changing forecast meteorological
+// conditions are included in BECMG groups. The omitted conditions are carried
+// over from the previous time group."
+//
+// `complete` marks the groups that restate everything — the initial group and
+// every FM group, which the AIM names as the exception — so they replace the
+// carried state instead of inheriting from it.
+function mergeConditions(own, carried, complete) {
+  if (complete || !carried) return own
+
+  var wind = own.stated.wind ? own.wind : carried.wind
+  var visibility = own.stated.visibility ? own.visibility : carried.visibility
+  var clouds = own.stated.clouds ? own.clouds : carried.clouds
+  var weather = own.stated.weather ? own.weather : carried.weather
+
+  return {
+    wind: wind,
+    visibility: visibility,
+    clouds: clouds,
+    weather: weather,
+    stated: own.stated,
+    category: classifyFlightCategory({ clouds: clouds, visibility: visibility })
+  }
+}
+
+// Classify every group against the conditions in force, not against its own
+// tokens alone. A BECMG carrying only a wind change governs for its whole
+// window with the visibility and sky of the group before it; read on its own
+// tokens it has no visibility, which classifies as no category, and the frise
+// paints hours of an ordinary forecast grey.
+//
+// Overlays inherit too, from the prevailing group in force where they open: a
+// TEMPO states what fluctuates, not a fresh sky.
+function resolveTafConditions(groups) {
+  // Document order is time order for the prevailing events, so one pass is
+  // enough: each group inherits from the one before it.
+  var carried = null
+  var prevailing = []
+  for (var i = 0; i < groups.length; i++) {
+    var group = groups[i]
+    if (isOverlayPeriod(group)) {
+      var parent = carried
+      for (var p = 0; p < prevailing.length; p++) {
+        if (prevailing[p].timeFrom <= group.timeFrom && prevailing[p].timeTo > group.timeFrom)
+          parent = prevailing[p].conditions
+      }
+      group.conditions = mergeConditions(group.conditions, parent, false)
+    } else {
+      var complete = prevailing.length === 0 || group.change === "FM"
+      carried = mergeConditions(group.conditions, carried, complete)
+      group.conditions = carried
+      prevailing.push(group)
+    }
+  }
+  return groups
 }
 
 // Parse a TAF into its change groups. Change groups are what the frise is
@@ -766,20 +849,31 @@ function parseTaf(json) {
     }
     if (timeFrom === null || timeTo === null) continue
 
-    var conditions = conditionsFromTokens(group.tokens)
     periods.push({
       timeFrom: timeFrom,
       timeTo: timeTo,
       change: group.change,
       probability: group.probability,
-      wdir: conditions.wind.wdir,
-      wspd: conditions.wind.wspd,
-      wgst: conditions.wind.wgst,
-      visibility: conditions.visibility,
-      clouds: conditions.clouds,
-      weather: conditions.weather,
-      category: conditions.category
+      conditions: conditionsFromTokens(group.tokens)
     })
+  }
+
+  resolveTafConditions(periods)
+
+  // One flat shape out: the panel and the frise read wdir/wspd/visibility
+  // directly, and the inheritance above is a parse-time concern, not a display
+  // one. `conditions` is removed rather than left behind — a caller reading a
+  // period should not have to know it exists.
+  for (var f = 0; f < periods.length; f++) {
+    var merged = periods[f].conditions
+    delete periods[f].conditions
+    periods[f].wdir = merged.wind.wdir
+    periods[f].wspd = merged.wind.wspd
+    periods[f].wgst = merged.wind.wgst
+    periods[f].visibility = merged.visibility
+    periods[f].clouds = merged.clouds
+    periods[f].weather = merged.weather
+    periods[f].category = merged.category
   }
 
   return {

@@ -337,6 +337,96 @@ test("parseTaf keeps PROB/TEMPO groups as overlays", function () {
   assert.equal(prevailing[0].category, "VFR")
 })
 
+test("a BECMG that carries only a wind change keeps the sky and visibility before it", function () {
+  // The live OEJN forecast, which is where this was found: the BECMG opens at
+  // 18Z stating a wind and nothing else, and read on its own tokens it had no
+  // visibility — no category, and two hours of the frise painted grey.
+  // AIM 7-1-29: "The omitted conditions are carried over from the previous
+  // time group."
+  var taf = Model.parseTaf({
+    icaoId: "OEJN",
+    rawTAF: "TAF OEJN 240500Z 2406/2512 32014KT CAVOK BECMG 2418/2420 36008KT "
+      + "BECMG 2500/2502 VRB03KT 7000 NSC PROB30 TEMPO 2500/2505 2000 BR BECMG 2506/2508 34014KT CAVOK",
+    validTimeFrom: Date.UTC(2026, 8, 24, 6) / 1000,
+    validTimeTo: Date.UTC(2026, 8, 25, 12) / 1000
+  })
+
+  var becmg = taf.periods[1]
+  assert.equal(becmg.change, "BECMG")
+  // The change itself took effect...
+  assert.equal(becmg.wdir, 360)
+  assert.equal(becmg.wspd, 8)
+  // ...and the elements it did not mention are the ones in force before it.
+  assert.equal(becmg.visibility.meters, 10000)
+  assert.equal(becmg.category, "VFR")
+
+  // Every band of the frise therefore has a category: the grey was a band that
+  // classified as nothing at all.
+  var timeline = Model.tafTimeline(taf.periods, Date.UTC(2026, 8, 24, 19), 500)
+  var bands = timeline.segments.filter(function (s) { return !s.overlay })
+  assert.ok(bands.length > 1)
+  for (var i = 0; i < bands.length; i++)
+    assert.notEqual(Model.categoryColorRole(bands[i].category), "none")
+
+  // A BECMG that DOES state new conditions replaces them rather than merging
+  // with what came before.
+  var stated = taf.periods[2]
+  assert.equal(stated.visibility.meters, 7000)
+  assert.equal(stated.category, "MVFR")
+})
+
+test("a FM group restates every element and never inherits", function () {
+  // AIM 7-1-29 names FM as the exception: "A FM group contains all the
+  // required elements". A FM that lowered the ceiling must not keep the
+  // visibility of the group before it.
+  var taf = Model.parseTaf({
+    icaoId: "KJFK",
+    rawTAF: "TAF KJFK 220529Z 2206/2312 06009KT P6SM OVC050 FM221500 04014G24KT 2SM BR OVC008",
+    validTimeFrom: 1790056800,
+    validTimeTo: 1790164800
+  })
+
+  assert.equal(taf.periods[0].category, "VFR")
+  var fm = taf.periods[1]
+  assert.equal(fm.change, "FM")
+  // 2 SM visibility and an 800 ft ceiling: IFR, not the VFR it inherited from.
+  assert.equal(fm.visibility.meters, 2 * Model.METERS_PER_SM)
+  assert.equal(fm.category, "IFR")
+})
+
+test("a TEMPO that states a wind but no visibility keeps the visibility it fluctuates around", function () {
+  var taf = Model.parseTaf({
+    icaoId: "EGLL",
+    rawTAF: "TAF EGLL 220454Z 2206/2312 VRB03KT 9999 SCT035 TEMPO 2210/2212 28015G25KT",
+    validTimeFrom: 1790056800,
+    validTimeTo: 1790164800
+  })
+
+  var tempo = taf.periods[1]
+  assert.equal(Model.isOverlayPeriod(tempo), true)
+  assert.equal(tempo.wspd, 15)
+  // The overlay states no visibility, so it shows the conditions it sits over
+  // rather than nothing.
+  assert.equal(tempo.visibility.meters, 10000)
+  assert.equal(tempo.category, "VFR")
+})
+
+test("NSW states the weather as clear and does not inherit the old weather", function () {
+  var taf = Model.parseTaf({
+    icaoId: "EGLL",
+    rawTAF: "TAF EGLL 220454Z 2206/2312 20010KT 4000 RA BKN010 BECMG 2208/2210 9999 NSW SCT030",
+    validTimeFrom: 1790056800,
+    validTimeTo: 1790164800
+  })
+
+  assert.deepEqual(taf.periods[0].weather, ["RA"])
+  // NSW is a value — "nothing significant" — not an omission, so the rain does
+  // not survive into the group that called it off.
+  var becmg = taf.periods[1]
+  assert.deepEqual(becmg.weather, [])
+  assert.equal(becmg.category, "VFR")
+})
+
 test("currentTafPeriod names the prevailing group in force, never an overlay", function () {
   var taf = Model.parseTaf({
     icaoId: "KJFK",

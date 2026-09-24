@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1 — 2026-09-24
+
+- TAF change groups inherit the conditions they do not state, instead of being
+  classified on their own tokens alone. AIM 7-1-29: with the exception of an FM
+  group, "the new time period will include only those elements which are
+  expected to change", and of a BECMG, "the omitted conditions are carried over
+  from the previous time group". A BECMG carrying only a wind change therefore
+  kept the visibility and sky in force before it, not nothing. Read literally it
+  had no visibility, which classifies as no category at all, and the timeline
+  painted those hours in the grey fallback — the OEJN 18Z–00Z band. The decoded
+  group also led with "—" and could be picked as the "NOW" group with no
+  category. FM groups still replace every element, as the AIM says they restate
+  them. TEMPO/PROB overlays inherit the same way, from the prevailing group in
+  force where they open; NSW counts as a stated value, so it clears the weather
+  rather than inheriting it.
+
 ## 0.4.0 — 2026-09-24
 
 - NOTAMs are gone from the plugin and its description. The `notamSource` and

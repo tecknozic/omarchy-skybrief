@@ -595,6 +595,64 @@ test("describeTafPeriods marks the group in force and splits heading from body",
   assert.deepEqual(Model.describeTafPeriods(null, "metric", "utc", now), [])
 })
 
+test("tafTimeline ramps a BECMG band from the conditions before it", function () {
+  var period = function (from, to, category, change) {
+    return { timeFrom: from, timeTo: to, category: category, change: change, probability: null }
+  }
+  var h = 3600000
+  var base = Date.UTC(2026, 8, 24, 6)
+  // A BECMG period's timeFrom/timeTo IS its window — "BECMG 2418/2420" — not the
+  // length of its band. The band runs from the window's start until the next
+  // group takes over at 00Z: 6 h over 220px at 10px/h, so 60px. The 18Z–20Z
+  // window is the first 20px of that, and the remaining 40px are settled MVFR.
+  var timeline = Model.tafTimeline([
+    period(base, base + 12 * h, "VFR", null),
+    period(base + 12 * h, base + 14 * h, "MVFR", "BECMG"),
+    period(base + 18 * h, base + 22 * h, "IFR", "FM")
+  ], null, 220)
+
+  var bands = timeline.segments.filter(function (s) { return !s.overlay })
+  assert.equal(bands.length, 3)
+
+  // The initial group has nothing to ramp from, and an FM group states its
+  // conditions from an instant.
+  assert.equal(bands[0].ramp, null)
+  assert.equal(bands[2].ramp, null)
+
+  var becmg = bands[1]
+  assert.equal(becmg.width, 60)
+  assert.ok(becmg.ramp, "a BECMG band carries a ramp")
+  // A third of the band, ramping from what was in force to what it states.
+  assert.equal(Math.round(becmg.ramp.from * becmg.width), 0)
+  assert.equal(Math.round(becmg.ramp.to * becmg.width), 20)
+  assert.equal(becmg.ramp.fromCategory, "VFR")
+  assert.equal(becmg.ramp.toCategory, "MVFR")
+})
+
+test("a BECMG window that outruns its band is clipped to the visible part", function () {
+  var period = function (from, to, category, change) {
+    return { timeFrom: from, timeTo: to, category: category, change: change, probability: null }
+  }
+  var h = 3600000
+  var base = Date.UTC(2026, 8, 24, 6)
+  // "BECMG 2418/2422" ramps over four hours, but a group taking over at 20Z
+  // ends the band first: the ramp can only cover the 18Z–20Z that is drawn,
+  // and it must still reach the far edge rather than stopping short of it.
+  var timeline = Model.tafTimeline([
+    period(base, base + 12 * h, "VFR", null),
+    period(base + 12 * h, base + 16 * h, "MVFR", "BECMG"),
+    period(base + 14 * h, base + 18 * h, "IFR", "FM")
+  ], null, 180)
+
+  var becmg = timeline.segments.filter(function (s) { return !s.overlay })[1]
+  assert.equal(becmg.width, 20)
+  assert.ok(becmg.ramp)
+  // Clipped to the band: the ramp spans the whole of it, not the four hours.
+  assert.equal(becmg.ramp.from, 0)
+  assert.equal(becmg.ramp.to, 1)
+  assert.equal(becmg.ramp.toMs, becmg.toMs)
+})
+
 test("tafTimeline tiles the validity window and marks overlays", function () {
   var taf = Model.parseTaf({
     icaoId: "KJFK",

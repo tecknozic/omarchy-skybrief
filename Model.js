@@ -1066,10 +1066,38 @@ function formatObservationLine(parsed, units) {
   return parts.join(" · ")
 }
 
+// The window over which a BECMG's change is said to happen, clipped to the
+// band it governs.
+//
+// "BECMG 2418/2420" does not mean the new conditions hold from 18Z: it means
+// they become established AT SOME POINT between 18Z and 20Z. The band cannot
+// pick an hour the forecast does not name, so it reports the ambiguity it has —
+// a ramp from what was in force to what will be — and only the end of the
+// window is a time the TAF is willing to commit to.
+//
+// Null for anything else: an FM group and the initial group state conditions
+// from an instant, so their bands are flat.
+function becmgRampWindow(period, bandStart, bandEnd) {
+  if (!period || period.change !== "BECMG") return null
+  var from = numberOrNull(period.timeFrom)
+  var to = numberOrNull(period.timeTo)
+  if (from === null || to === null) return null
+  var start = Math.max(from, bandStart)
+  var end = Math.min(to, bandEnd)
+  // A window the band swallows whole, or a degenerate one, is no ramp at all.
+  if (end <= start) return null
+  return { fromMs: start, toMs: end }
+}
+
 // Project the forecast onto a pixel frise. Prevailing conditions are swept as
 // events (base, FM, BECMG) so the bands tile the whole validity window with no
 // gaps; TEMPO and PROB groups come back flagged as overlays, because they
 // fluctuate around the prevailing conditions rather than replacing them.
+//
+// A BECMG band carries a ramp: the fraction of it that the change is expected
+// to happen over, with the category in force before it, so the frise can be
+// drawn as a transition rather than as a change that took effect on the hour
+// the window opened.
 function tafTimeline(periods, nowMs, widthPx) {
   var list = []
   if (Array.isArray(periods)) {
@@ -1122,6 +1150,10 @@ function tafTimeline(periods, nowMs, widthPx) {
     var end = e + 1 < events.length ? events[e + 1].at : toMs
     if (end <= start) continue
     var segPeriod = events[e].period
+    // What was in force before this band: the conditions the change moves away
+    // from, which is the other end of the ramp.
+    var previous = e > 0 ? events[e - 1].period : null
+    var ramp = becmgRampWindow(segPeriod, start, end)
     segments.push({
       x: projectX(start),
       width: Math.max(0, projectX(end) - projectX(start)),
@@ -1130,7 +1162,18 @@ function tafTimeline(periods, nowMs, widthPx) {
       category: segPeriod.category,
       change: segPeriod.change,
       overlay: false,
-      label: labelFor(segPeriod, start)
+      label: labelFor(segPeriod, start),
+      // The ramp is a fraction of THIS band, so it survives the band being
+      // clipped: a window that opened before the band, or that the band ends
+      // inside, still ramps over the part that is visible.
+      ramp: ramp === null ? null : {
+        from: (ramp.fromMs - start) / (end - start),
+        to: (ramp.toMs - start) / (end - start),
+        fromMs: ramp.fromMs,
+        toMs: ramp.toMs,
+        fromCategory: previous ? previous.category || "" : "",
+        toCategory: segPeriod.category || ""
+      }
     })
   }
 

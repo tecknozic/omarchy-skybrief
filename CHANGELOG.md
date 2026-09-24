@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2 — 2026-09-24
+
+- A BECMG band on the TAF timeline is drawn as a gradient, not as a change that
+  took effect on the hour its window opened. "BECMG 2418/2420" says the new
+  conditions establish themselves somewhere between 18Z and 20Z; nothing in the
+  report says where, so the frise now ramps from the category in force before
+  the change to the one it brings, and is flat only after the window closes.
+  An FM group and the initial group still start at an instant, which is what
+  they state. The ramp is clipped to the band it belongs to, so a BECMG whose
+  window runs past the next group ramps over the part that is actually drawn.
+
 ## 0.4.1 — 2026-09-24
 
 - TAF change groups inherit the conditions they do not state, instead of being

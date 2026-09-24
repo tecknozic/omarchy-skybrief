@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.tecknozic.skybrief",
   "name": "SkyBrief",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "author": "tecknozic",
   "license": "MIT",
   "description": "Aviation weather for the Omarchy bar: METAR, TAF and flight category at a glance, decoded or raw.",

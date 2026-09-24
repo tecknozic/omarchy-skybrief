@@ -44,6 +44,15 @@ closes it again on a second click. Middle click refreshes; right click opens the
 detail view directly. With the popup open, `r` refreshes, `c` copies the raw
 METAR, `t` the raw TAF, and `d` toggles the detail view.
 
+On the timeline, an `FM` group starts its colour at an instant, because that is
+what it states. A **BECMG** does not: "BECMG 2418/2420" means the new conditions
+become established *somewhere* between 18Z and 20Z, and nothing in the report
+says where. Those bands are therefore drawn as a gradient from the category in
+force before the change to the one it brings, so the frise shows an hour the
+forecast does not commit to as the uncertainty it is, instead of pretending the
+change happened on the stroke of 18Z. The band is flat again after the window
+closes — the one moment the TAF does name.
+
 The search field takes either an **ICAO code** or a **place name**. A
 four-character code is used directly; anything longer is geocoded and matched
 against the reporting fields around that point, and the candidates are listed

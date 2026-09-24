@@ -715,10 +715,43 @@ Panel {
               for (var i = 0; i < timeline.segments.length; i++) {
                 var segment = timeline.segments[i]
                 var role = Model.categoryColorRole(segment.category)
-                ctx.fillStyle = root.categoryColors[role] !== undefined ? root.categoryColors[role] : "#888888"
+                var toColor = root.categoryColors[role] !== undefined ? root.categoryColors[role] : "#888888"
+                ctx.fillStyle = toColor
                 ctx.globalAlpha = segment.overlay ? 0.45 : 0.9
                 var y = segment.overlay ? band / 2 + 1 : 1
                 var h = segment.overlay ? band / 2 - 3 : band - 3
+                var right = segment.x + segment.width
+
+                // A BECMG band is not a change that took effect on the hour the
+                // window opened: the TAF says only that the new conditions
+                // establish themselves somewhere inside that window. The band is
+                // drawn as a ramp from the conditions in force before it to the
+                // ones it states, and flat only beyond the window — the one
+                // moment the TAF does name.
+                var ramp = segment.ramp
+                if (ramp) {
+                  var fromRole = Model.categoryColorRole(ramp.fromCategory)
+                  var fromColor = root.categoryColors[fromRole] !== undefined ? root.categoryColors[fromRole] : toColor
+                  var x0 = segment.x + ramp.from * segment.width
+                  var x1 = segment.x + ramp.to * segment.width
+                  // Whatever the ramp does not cover is unambiguous: the old
+                  // conditions before it, the new ones after it.
+                  if (x0 > segment.x) {
+                    ctx.fillStyle = fromColor
+                    ctx.fillRect(segment.x, y, x0 - segment.x, h)
+                  }
+                  var gradient = ctx.createLinearGradient(x0, 0, x1, 0)
+                  gradient.addColorStop(0, fromColor)
+                  gradient.addColorStop(1, toColor)
+                  ctx.fillStyle = gradient
+                  ctx.fillRect(x0, y, Math.max(1, x1 - x0), h)
+                  if (x1 < right) {
+                    ctx.fillStyle = toColor
+                    ctx.fillRect(x1, y, right - x1, h)
+                  }
+                  continue
+                }
+
                 ctx.fillRect(segment.x, y, Math.max(1, segment.width - 1), h)
               }
               ctx.globalAlpha = 1

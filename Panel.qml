@@ -401,20 +401,6 @@ Panel {
                 }
               }
             }
-            // The refresh lives on the header, right after the category pill:
-            // it acts on the whole card, and the card starts here. The hero
-            // reserves the space itself, so the pill never collides with it.
-            trailingControl: Component {
-              PanelActionButton {
-                id: refreshButton
-                iconText: "󰑓"
-                tooltipText: root.service && root.service.status === "loading"
-                  ? "Refreshing…" : "Refresh now"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.refresh()
-              }
-            }
           }
 
           // A stale report is never presented as a current one.
@@ -450,22 +436,22 @@ Panel {
           // The label names the CURRENT mode and the control is the switch, not
           // a sentence about what switching does: the METAR text below is the
           // explanation, and the description was restating it.
+          //
+          // The switch sits against the label it qualifies rather than at the
+          // far edge of the card: "Raw [o]" reads as one control, and the
+          // refresh then owns the trailing edge of this row on its own.
           Row {
             width: parent.width
             spacing: Style.space(8)
 
             Text {
+              id: rawLabel
               textFormat: Text.PlainText
               text: root.showRaw ? "Raw" : "Decoded"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
               anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Item {
-              width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.spacing - rawToggle.implicitWidth)
-              height: 1
             }
 
             ToggleSwitch {
@@ -479,6 +465,26 @@ Panel {
                 text: root.showRaw ? "Show the decoded reading" : "Show the raw METAR text"
                 fontFamily: root.fontFamily
               }
+            }
+
+            Item {
+              width: Math.max(0, parent.width - rawLabel.implicitWidth - rawToggle.implicitWidth
+                - refreshButton.implicitWidth - parent.spacing * 3)
+              height: 1
+            }
+
+            // The refresh acts on the whole card, but it belongs with the mode
+            // switch: both are how the reader asks for something to be shown
+            // differently, and neither is about one particular report.
+            PanelActionButton {
+              id: refreshButton
+              iconText: "󰑓"
+              tooltipText: root.service && root.service.status === "loading"
+                ? "Refreshing…" : "Refresh now"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              anchors.verticalCenter: parent.verticalCenter
+              onClicked: root.refresh()
             }
           }
 

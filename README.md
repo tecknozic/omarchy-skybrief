@@ -11,10 +11,11 @@ glance, decoded or raw.
 
 ## What it shows
 
-![SkyBrief's popup open on the desktop: the VFR pill on the bar, the raw METAR
-for EIDW, the folded TREND line, the TAF with its category timeline and colour
-legend, the quick list with each station's category and age, and the search
-field](preview.png)
+![SkyBrief's popup open on the desktop: the VFR pill on the bar, the EGKK
+observation with the category pill under its symbol, the mode switch and the
+refresh on one row, the folded TREND line, the TAF with its category timeline
+and colour legend, the quick list with each station's category and age, and the
+search field](preview.png)
 
 A one-letter pill in the bar, one letter per flight category:
 

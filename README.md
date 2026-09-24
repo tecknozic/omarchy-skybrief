@@ -1,12 +1,13 @@
 # SkyBrief
 
 Aviation weather in the Omarchy bar: METAR, TAF and the flight category at a
-glance, decoded or raw, with optional NOTAMs.
+glance, decoded or raw.
 
 > **This is not a flight-planning tool.** SkyBrief is a convenience display of
-> publicly published weather. It is not a briefing, it has no NOTAM coverage
-> guarantee, and it does not know about your aircraft or your route. Obtain an
-> official briefing from your national provider before any flight.
+> publicly published weather. It is not a briefing, it knows nothing about your
+> aircraft or your route, and it is not a substitute for the notice products an
+> official briefing carries. Obtain that briefing from your national provider
+> before any flight.
 
 ## What it shows
 
@@ -38,11 +39,10 @@ with **NOW**, so the paragraph that applies can be found without comparing five
 clock ranges. A **TREND** line folds out the earlier observations of the same
 station — one METAR says what is happening, three say which way it is going.
 **Details** widens the popup into the view that holds what does not fit in a
-glance — wind components per runway, SIGMETs for the configured FIR, and NOTAMs
-when they are configured — and closes it again on a second click. Middle click
-refreshes; right click opens the detail view directly. With the popup open, `r`
-refreshes, `c` copies the raw METAR, `t` the raw TAF, and `d` toggles the detail
-view.
+glance — wind components per runway and SIGMETs for the configured FIR — and
+closes it again on a second click. Middle click refreshes; right click opens the
+detail view directly. With the popup open, `r` refreshes, `c` copies the raw
+METAR, `t` the raw TAF, and `d` toggles the detail view.
 
 The search field takes either an **ICAO code** or a **place name**. A
 four-character code is used directly; anything longer is geocoded and matched
@@ -56,13 +56,6 @@ one was meant.
 | Product | Source | Notes |
 |---|---|---|
 | METAR, TAF, SIGMET, station and runway metadata | [aviationweather.gov](https://aviationweather.gov/data/api/) (NOAA/NWS) | No key, no account, worldwide. US Government work — public domain. |
-| NOTAM | [autorouter.aero](https://www.autorouter.aero/) (Eurocontrol EAD/INO) | Requires your own account with API access. European coverage. |
-
-There is no free NOTAM API anywhere: the FAA endpoints are either closed or
-gated behind an account, and the national AIS sites publish HTML rather than an
-API. autorouter is the only service with a workable API, so NOTAMs are optional
-and off by default. Until you configure it, SkyBrief makes no NOTAM request at
-all.
 
 Geocoding for the "nearest station" fallback uses
 [open-meteo](https://open-meteo.com/) — the same service the built-in weather
@@ -94,14 +87,13 @@ omarchy bar set io.github.tecknozic.skybrief timeFormat local
 omarchy bar set io.github.tecknozic.skybrief refreshMinutes 5
 omarchy bar set io.github.tecknozic.skybrief maxAgeMinutes 45
 omarchy bar set io.github.tecknozic.skybrief alertCategory IFR
-omarchy bar set io.github.tecknozic.skybrief notamSource autorouter
 ```
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `station` | *(empty)* | Favourite ICAO code. Empty uses the nearest reporting field to the Omarchy weather location. |
 | `quickStations` | *(empty)* | Comma-separated codes offered as one-click rows in the popup, **ten at most**. Extra codes are ignored; the header shows the count. |
-| `fir` | *(empty)* | FIR identifier (`LFFF`, `EDGG`, …) whose NOTAMs and SIGMETs are shown alongside the aerodrome's. |
+| `fir` | *(empty)* | FIR identifier (`LFFF`, `EDGG`, …) whose SIGMETs are shown alongside the aerodrome's. |
 | `showRaw` | `true` | Start on the raw report text rather than the decoded reading. |
 | `units` | `metric` | Applies to temperature, visibility and altimeter **only**. Wind stays in knots and cloud base in feet, as it is spoken. |
 | `timeFormat` | `utc` | `utc` shows `07:30Z`; `local` shows the local clock with a zone suffix. |
@@ -109,8 +101,6 @@ omarchy bar set io.github.tecknozic.skybrief notamSource autorouter
 | `maxAgeMinutes` | `75` | An observation older than this is flagged as stale in the popup and the tooltip. |
 | `historyCount` | `3` | How many earlier observations the TREND line unfolds. `0` hides it. The API caps a response at six. |
 | `alertCategory` | `off` | Send a desktop notification when the favourite station's category drops to this level or worse. |
-| `notamSource` | `off` | `autorouter` enables the NOTAM sections. |
-| `notamLimit` | `40` | NOTAMs requested per query (the API caps this at 100). |
 
 If `station` is empty, SkyBrief reads the location set by
 `omarchy-weather-location` and picks the nearest reporting field from a
@@ -118,37 +108,17 @@ bounding-box query. Coordinates are used directly; a bare place name is
 geocoded. With neither available it reports the error rather than silently
 falling back to some arbitrary airport.
 
-## NOTAMs
-
-1. Create a free account at <https://www.autorouter.aero/signup>.
-2. Request API access through their support ticket system. It is granted by
-   hand, not automatically.
-3. In SkyBrief's Details view, set the NOTAM source to `autorouter`, then enter
-   the account's user and password and press **Save credentials**.
-
-The credentials are written to
-`~/.local/state/omarchy/skybrief/autorouter.json` with mode `0600` and are never
-placed in `shell.json` — that file is mode `0644` on a default Omarchy install
-and is tracked by nothing, which is no place for a secret.
-
-SkyBrief asks for an OAuth2 token only when the current one has less than five
-minutes left (autorouter caps an account at 20 live tokens and rejects pointless
-requests), and passes both the token request body and the bearer header to
-`curl` on **stdin**, so neither the password nor the token ever appears in `ps`
-output or in the shell history.
-
 ## Removing
 
 ```bash
 omarchy plugin disable io.github.tecknozic.skybrief
 omarchy plugin remove io.github.tecknozic.skybrief
-rm -f ~/.local/state/omarchy/skybrief/autorouter.json
 ```
 
 ## Security notes
 
-- Every external binary is invoked by absolute path (`/usr/bin/curl`,
-  `/usr/bin/timeout`, `/usr/bin/install`, `/usr/bin/rm`,
+- Every external binary is invoked by absolute path (`/usr/bin/bash`,
+  `/usr/bin/curl`, `/usr/bin/head`, `/usr/bin/timeout`,
   `/usr/bin/omarchy-notification-send`), so nothing resolves through `$PATH`.
 - Every network child runs with `clearEnvironment: true`.
 - Only the notification child gets an environment, and only the two variables
@@ -175,16 +145,16 @@ rm -f ~/.local/state/omarchy/skybrief/autorouter.json
 ## Development
 
 ```bash
-node --test tests/          # Model.js and Autorouter.js unit tests
+node --test tests/          # JavaScript unit tests
 omarchy plugin validate .   # manifest, entry points, no symlinks
 scripts/qmllint.sh          # QML syntax and unknown-property checks
 scripts/dev-sync.sh         # copy into ~/.config/omarchy/plugins/ and rescan
 ```
 
-`Model.js` and `Autorouter.js` are plain JavaScript with no QML types, so the
-parsing and classification rules are testable under `node` alone. They are
-cached by the shell's engine independently of a component rescan — after editing
-either, run `omarchy restart shell`, not just `rescanPlugins`.
+`Model.js` is plain JavaScript with no QML types, so the parsing and
+classification rules are testable under `node` alone. It is cached by the
+shell's engine independently of a component rescan — after editing it, run
+`omarchy restart shell`, not just `rescanPlugins`.
 
 ## Licence
 

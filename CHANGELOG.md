@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-09-24
+
+- NOTAMs are gone from the plugin and its description. The `notamSource` and
+  `notamLimit` settings, the credentials field, the autorouter client and the
+  NOTAM section are removed, not switched off: the service no longer opens a
+  socket to autorouter, and nothing in the manifest, the README or the panel
+  mentions notices. The code stays in `Autorouter.js` with its tests, unwired,
+  for the day a notice source that does not need a per-user account turns up.
+- The `fir` setting remains, and now means SIGMET coverage alone.
+
 ## 0.3.2 — 2026-09-22
 
 - Decoded reports are rendered as plain text unconditionally. `AutoText` on the

@@ -6,8 +6,8 @@ import qs.Ui
 import "Model.js" as Model
 
 // The popup: the observation and the forecast it leads into, then — behind the
-// Details button — what does not fit in a glance: runway wind components,
-// SIGMETs and NOTAMs.
+// Details button — what does not fit in a glance: runway wind components and
+// SIGMETs.
 //
 // `expanded` is a view state, not a second window: the same KeyboardPanel grows
 // and a column appears at the end. One escape key, one focus target, one popout
@@ -43,13 +43,10 @@ Panel {
   // and three earlier ones above the forecast would push it off the first
   // screenful. The choice does not persist — it is a glance, not a preference.
   property bool trendOpen: false
-  property string credentialUser: ""
-  property string credentialPassword: ""
   property string copyNote: ""
   // A one-line answer to the last list action: the personal list being full is
   // a state the user cannot see from the rows themselves.
   property string listNote: ""
-  property string expandedNotam: ""
 
   readonly property string station: root.service ? String(root.service.favouriteStation || "") : ""
   readonly property var report: root.service ? root.service.reportFor(root.station) : null
@@ -59,15 +56,9 @@ Panel {
   readonly property string units: root.service ? root.service.units : "metric"
   readonly property string timeFormat: root.service ? root.service.timeFormat : "utc"
   readonly property bool showRaw: root.service ? root.service.showRaw : true
-  readonly property bool notamsEnabled: root.service ? root.service.notamsEnabled : false
-  readonly property bool hasCredentials: root.service ? root.service.hasCredentials : false
-  readonly property string notamSource: root.service ? root.service.notamSource : "off"
   readonly property string configuredFir: root.service ? root.service.configuredFir : ""
-  readonly property var notams: root.service ? root.service.notams : ({ forStation: [], forFir: [] })
   readonly property var sigmets: root.service ? root.service.sigmetsForFir() : []
   readonly property string sigmetError: root.service ? String(root.service.sigmetError || "") : ""
-  readonly property string notamError: root.service ? String(root.service.notamError || "") : ""
-  readonly property bool notamPending: root.service ? root.service.notamPending === true : false
   readonly property var stationMeta: root.service ? root.service.stationInfo[root.station] || null : null
   readonly property var runways: root.service ? root.service.runwaysFor(root.station) : []
 
@@ -80,11 +71,11 @@ Panel {
   readonly property bool sigmetSectionVisible: root.configuredFir !== ""
     && (root.sigmets.length > 0 || root.sigmetError !== "")
 
-  // Runways, SIGMET and NOTAMs are the whole of the detail view, and any of the
-  // three can be absent: no wind means no crosswind table, no configured FIR
-  // means no SIGMET, no autorouter account means no NOTAM. When all three are
-  // absent the view would open empty, so it says so instead.
-  readonly property bool detailHasContent: root.hasRunwayComponents || root.sigmetSectionVisible || root.notamsEnabled
+  // Runways and SIGMET are the whole of the detail view, and either can be
+  // absent: no wind means no crosswind table, no configured FIR means no
+  // SIGMET. When both are absent the view would open empty, so it says so
+  // instead.
+  readonly property bool detailHasContent: root.hasRunwayComponents || root.sigmetSectionVisible
   readonly property string detailLabel: root.expanded ? "Close" : "Details"
   readonly property string category: report ? String(report.category || "") : ""
   readonly property color foreground: root.bar ? root.bar.foreground : Color.foreground
@@ -146,7 +137,6 @@ Panel {
 
   function close() {
     root.copyNote = ""
-    root.expandedNotam = ""
     root.expanded = false
     root.trendOpen = false
     resetSearch()
@@ -266,11 +256,6 @@ Panel {
     copyNoteTimer.restart()
   }
 
-  function saveCredentials() {
-    if (root.service) root.service.saveCredentials(root.credentialUser, root.credentialPassword)
-    root.credentialPassword = ""
-  }
-
   readonly property string quickStations: service ? service.stationList().join(",") : ""
 
   Timer {
@@ -300,7 +285,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       // While a text field has the keyboard, the panel must not steal keys.
-      blocked: searchField.activeFocus || userField.activeFocus || passwordField.activeFocus
+      blocked: searchField.activeFocus
       onCloseRequested: root.expanded ? root.expanded = false : root.close()
       onTextKey: function(text) {
         if (text === "r") root.refresh()
@@ -321,9 +306,7 @@ Panel {
       // this the catcher (Keys.BeforeItem) consumes Tab, no field can ever take
       // focus, and `blocked` above would be dead logic.
       onTabRequested: function(direction) {
-        var fields = root.expanded
-          ? [root.hasCredentials ? null : userField, root.hasCredentials ? null : passwordField]
-          : [searchField]
+        var fields = [searchField]
         var available = []
         for (var i = 0; i < fields.length; i++)
           if (fields[i] && fields[i].visible) available.push(fields[i])
@@ -1076,14 +1059,14 @@ Panel {
             onClicked: root.expanded = !root.expanded
           }
 
-          // Nothing to unfold — and saying which of the three conditions is
+          // Nothing to unfold — and saying which of the two conditions is
           // missing would mean naming a setting the user may not even want.
           Text {
             visible: !root.detailHasContent
             width: parent.width
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
-            text: "No runway data for this field, no FIR configured, and NOTAMs off — nothing to unfold."
+            text: "No runway data for this field and no FIR configured — nothing to unfold."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -1100,7 +1083,7 @@ Panel {
           }
 
           // ================================================================
-          // Detail view — runways, SIGMET, NOTAM
+          // Detail view — runways, SIGMET
           // ================================================================
 
           Column {
@@ -1229,257 +1212,6 @@ Panel {
                   font.pixelSize: Style.font.bodySmall
                 }
               }
-            }
-
-            // ---- NOTAM -------------------------------------------------
-
-            // The NOTAM block is the last one, so the rule above it belongs to
-            // it only when something actually precedes it — a separator at the
-            // top of the detail view separates nothing.
-            PanelSeparator {
-              visible: root.hasRunwayComponents || root.sigmetSectionVisible
-              width: parent.width
-            }
-            PanelSectionHeader {
-              text: "NOTAM"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            // Off: an explanation and nothing else. Making an unauthenticated
-            // request to a service the user has not signed up for would be both
-            // pointless and rude.
-            Text {
-              visible: !root.notamsEnabled
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: "NOTAMs are not free anywhere: every public source needs an account. "
-                + "SkyBrief uses autorouter.aero — create a free account at "
-                + "https://www.autorouter.aero/signup, ask for API access through their "
-                + "support ticket system, then set the NOTAM source to autorouter here "
-                + "and enter the credentials below. Until then no NOTAM request is made."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Column {
-              visible: root.notamsEnabled
-              width: parent.width
-              spacing: Style.space(6)
-
-              Text {
-                visible: !root.hasCredentials
-                width: parent.width
-                textFormat: Text.PlainText
-                wrapMode: Text.Wrap
-                text: "Enter your autorouter account. The credentials are stored in "
-                  + "~/.local/state/omarchy/skybrief/autorouter.json with mode 0600 — "
-                  + "never in shell.json."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-              }
-
-              TextField {
-                id: userField
-                width: parent.width
-                visible: !root.hasCredentials
-                placeholderText: "autorouter user (email)"
-                foreground: root.foreground
-                font.family: root.fontFamily
-                onTextChanged: root.credentialUser = text
-              }
-
-              TextField {
-                id: passwordField
-                width: parent.width
-                visible: !root.hasCredentials
-                password: true
-                placeholderText: "autorouter password"
-                foreground: root.foreground
-                font.family: root.fontFamily
-                onTextChanged: root.credentialPassword = text
-              }
-
-              Button {
-                width: parent.width
-                bordered: true
-                visible: !root.hasCredentials
-                iconText: "󰆓"
-                text: "Save credentials"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.saveCredentials()
-              }
-            }
-
-            // Three distinct states, never conflated: a failed query, a query
-            // in flight, and a genuinely empty result.
-            Text {
-              visible: root.notamsEnabled && root.notamError !== ""
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: root.notamError
-              color: Color.urgent
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Text {
-              visible: root.notamsEnabled && root.notamError === "" && root.notamPending
-              width: parent.width
-              textFormat: Text.PlainText
-              text: "Querying autorouter…"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Text {
-              visible: root.notamsEnabled && root.hasCredentials && root.notamError === ""
-                && !root.notamPending
-                && root.notams.forStation.length === 0 && root.notams.forFir.length === 0
-              width: parent.width
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              text: "No NOTAM in force for this aerodrome or FIR."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Column {
-              visible: root.notamsEnabled && root.notams.forStation.length > 0
-              width: parent.width
-              spacing: Style.space(4)
-
-              PanelSectionHeader {
-                text: "AERODROME " + root.station
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-
-              Repeater {
-                model: root.notams.forStation
-
-                Column {
-                  required property var modelData
-                  width: parent.width
-                  spacing: Style.space(2)
-
-                  Row {
-                    width: parent.width
-                    spacing: Style.space(8)
-                    Text {
-                      textFormat: Text.PlainText
-                      text: modelData.id
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      font.bold: true
-                    }
-                    Text {
-                      textFormat: Text.PlainText
-                      text: modelData.validFrom + " → " + modelData.validTo
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-
-                  Text {
-                    width: parent.width
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                    // Folded at three lines and unfolded on click, so one long
-                    // NOTAM cannot push the rest off the panel.
-                    maximumLineCount: root.expandedNotam === modelData.id ? 1000 : 3
-                    elide: root.expandedNotam === modelData.id ? Text.ElideNone : Text.ElideRight
-                    text: modelData.text
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-
-                    MouseArea {
-                      anchors.fill: parent
-                      onClicked: root.expandedNotam = root.expandedNotam === modelData.id ? "" : modelData.id
-                    }
-                  }
-                }
-              }
-            }
-
-            Column {
-              visible: root.notamsEnabled && root.notams.forFir.length > 0
-              width: parent.width
-              spacing: Style.space(4)
-
-              PanelSectionHeader {
-                text: "FIR " + root.configuredFir
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-
-              Repeater {
-                model: root.notams.forFir
-
-                Column {
-                  required property var modelData
-                  width: parent.width
-                  spacing: Style.space(2)
-
-                  Row {
-                    width: parent.width
-                    spacing: Style.space(8)
-                    Text {
-                      textFormat: Text.PlainText
-                      text: modelData.id
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      font.bold: true
-                    }
-                    Text {
-                      textFormat: Text.PlainText
-                      text: modelData.validFrom + " → " + modelData.validTo
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-
-                  Text {
-                    width: parent.width
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                    maximumLineCount: root.expandedNotam === modelData.id ? 1000 : 3
-                    elide: root.expandedNotam === modelData.id ? Text.ElideNone : Text.ElideRight
-                    text: modelData.text
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-
-                    MouseArea {
-                      anchors.fill: parent
-                      onClicked: root.expandedNotam = root.expandedNotam === modelData.id ? "" : modelData.id
-                    }
-                  }
-                }
-              }
-            }
-
-            Button {
-              width: parent.width
-              visible: root.notamsEnabled && root.hasCredentials
-              bordered: true
-              iconText: "󰩹"
-              text: "Clear credentials"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: if (root.service) root.service.clearCredentials()
             }
           }
         }

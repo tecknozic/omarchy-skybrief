@@ -14,9 +14,9 @@ DEST="${OMARCHY_PLUGIN_DIR:-$HOME/.config/omarchy/plugins}/$PLUGIN_ID"
 
 # QML components reload on change, but the JS files are cached by the shell's
 # engine independently of a component rescan: only a shell restart picks up a
-# change to Model.js or Autorouter.js.
+# change to Model.js.
 echo "Synced to $DEST"
-echo "Component changes are live; run 'omarchy restart shell' after editing Model.js or Autorouter.js."
+echo "Component changes are live; run 'omarchy restart shell' after editing Model.js."
 
 if [[ "${1:-}" != "--no-reload" ]]; then
   omarchy-shell shell rescanPlugins

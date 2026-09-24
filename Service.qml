@@ -2,23 +2,19 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
-import "Autorouter.js" as Autorouter
 
 // Everything that must exist once, not once per screen.
 //
 // The shell mounts a `service` plugin exactly once and hands it to views
 // through shell.serviceFor(id) — a bar surface, by contrast, is created per
-// monitor. Timers, the report cache and the autorouter credentials therefore
-// live here, and the bar pill and the popup only render what this holds.
+// monitor. Timers and the report cache therefore live here, and the bar pill
+// and the popup only render what this holds.
 //
-// Two rules from the security review are load-bearing:
-//   * every external binary is called by absolute path, and every network
-//     child runs with a cleared environment, so nothing resolves through an
-//     inherited PATH;
-//   * the autorouter client secret is written on a child's stdin, never in
-//     argv, where `ps` and the shell history would both show it.
+// One rule from the security review is load-bearing: every external binary is
+// called by absolute path, and every network child runs with a cleared
+// environment, so nothing resolves through an inherited PATH.
 //
-// A third rule, from the marketplace review: the response size cap is enforced
+// A second rule, from the marketplace review: the response size cap is enforced
 // WHILE the body arrives, not after. Every network request goes through
 // requestCommand(), which pipes curl into `head -c maxResponseBytes`, so an
 // endpoint cannot make the shell buffer an unbounded body before any check
@@ -33,8 +29,6 @@ Item {
 
   readonly property string pluginId: "io.github.tecknozic.skybrief"
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace("file://", "")
-  readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy/skybrief"
-  readonly property string credentialPath: stateDir + "/autorouter.json"
   readonly property string weatherLocationPath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/weather.json"
 
   readonly property string apiBase: "https://aviationweather.gov/api/data"
@@ -83,8 +77,6 @@ Item {
   readonly property int refreshMinutes: Math.max(2, Number(setting("refreshMinutes", 10)) || 10)
   readonly property int maxAgeMinutes: Math.max(15, Number(setting("maxAgeMinutes", 75)) || 75)
   readonly property string alertCategory: String(setting("alertCategory", "off"))
-  readonly property string notamSource: String(setting("notamSource", "off"))
-  readonly property int notamLimit: Math.max(5, Math.min(100, Number(setting("notamLimit", 40)) || 40))
   // How far back the METAR request reaches. The API caps a response at six
   // observations per station (measured), so asking for more hours than the
   // trend reads only makes the response bigger, not the trend longer.
@@ -101,9 +93,8 @@ Item {
     var stationMoved = String(previous && previous.station || "").trim().toUpperCase() !== configuredStation
     var firMoved = String(previous && previous.fir || "").trim().toUpperCase() !== configuredFir
     var cadenceMoved = Number(previous && previous.refreshMinutes || 0) !== refreshMinutes
-    var notamMoved = String(previous && previous.notamSource || "") !== notamSource
 
-    if (stationMoved || firMoved || cadenceMoved || notamMoved) requestRefresh(true)
+    if (stationMoved || firMoved || cadenceMoved) requestRefresh(true)
   }
 
   // ---- state -------------------------------------------------------------
@@ -115,7 +106,6 @@ Item {
   property var histories: ({})
   property var tafs: ({})
   property var sigmets: []
-  property var notams: ({ forStation: [], forFir: [] })
   property var stationInfo: ({})
   property var runwayInfo: ({})
 
@@ -179,93 +169,6 @@ Item {
     return ""
   }
 
-  // ---- credentials -------------------------------------------------------
-
-  property var credential: ({})
-
-  readonly property bool hasCredentials: String(credential && credential.user || "") !== ""
-    && String(credential && credential.password || "") !== ""
-  readonly property bool notamsEnabled: notamSource === "autorouter"
-
-  property FileView credentialFile: FileView {
-    path: root.credentialPath
-    watchChanges: false
-    printErrors: false
-    onLoaded: root.credential = root.parseCredential(text())
-    onLoadFailed: root.credential = ({})
-  }
-
-  function parseCredential(raw) {
-    try {
-      var data = JSON.parse(String(raw || ""))
-      if (!data || typeof data !== "object") return ({})
-      return {
-        user: typeof data.user === "string" ? data.user : "",
-        password: typeof data.password === "string" ? data.password : ""
-      }
-    } catch (e) {
-      return ({})
-    }
-  }
-
-  // The credentials file must never be created world-readable, and the secret
-  // must never be visible in `ps`. `/usr/bin/install -D -m 600 /dev/stdin`
-  // creates the directory and the file with mode 0600 from stdin in one step —
-  // verified on this machine before being relied on here.
-  function saveCredentials(user, password) {
-    if (String(user || "").trim() === "" || String(password || "") === "") {
-      lastError = "Both the autorouter user and password are required"
-      return false
-    }
-    credentialWrite.payload = JSON.stringify({ user: String(user), password: String(password) }) + "\n"
-    credentialWrite.running = true
-    return true
-  }
-
-  function clearCredentials() {
-    credentialRemove.running = true
-  }
-
-  property string credentialPayload: ""
-
-  Process {
-    id: credentialWrite
-    property string payload: ""
-    command: ["/usr/bin/install", "-D", "-m", "600", "/dev/stdin", root.credentialPath]
-    clearEnvironment: true
-    stdinEnabled: true
-    running: false
-    stderr: StdioCollector { waitForEnd: true }
-    onStarted: {
-      credentialWrite.write(credentialWrite.payload)
-      credentialWrite.stdinEnabled = false
-    }
-    onExited: function(code) {
-      credentialWrite.stdinEnabled = true
-      if (code !== 0) {
-        root.lastError = "Could not save the autorouter credentials (exit " + code + ")"
-        return
-      }
-      root.credentialFile.reload()
-      root.tokenState = ({ token: "", expiresAtMs: 0 })
-      root.lastError = ""
-      root.requestRefresh(true)
-    }
-  }
-
-  Process {
-    id: credentialRemove
-    command: ["/usr/bin/rm", "-f", root.credentialPath]
-    clearEnvironment: true
-    running: false
-    onExited: function() {
-      root.credential = ({})
-      root.tokenState = ({ token: "", expiresAtMs: 0 })
-      root.notams = ({ forStation: [], forFir: [] })
-      root.requestRefresh(true)
-    }
-  }
-
   // ---- refresh -----------------------------------------------------------
 
   // Bumped by every new refresh. A response that arrives under an older
@@ -276,8 +179,6 @@ Item {
   property bool tafPending: false
   property bool sigmetPending: false
   property bool resolutionPending: false
-
-  property var tokenState: ({ token: "", expiresAtMs: 0 })
 
   function requestRefresh(force) {
     if (force !== true && fetchInFlight()) return
@@ -414,13 +315,6 @@ Item {
     sigmetProc.generation = generation
     sigmetProc.command = requestCommand(apiBase + "/isigmet?format=json")
     sigmetProc.running = true
-
-    if (notamsEnabled && hasCredentials) refreshNotams()
-    else if (notamsEnabled) fetchNotamStateNotNeeded()
-  }
-
-  function fetchNotamStateNotNeeded() {
-    notams = ({ forStation: [], forFir: [] })
   }
 
   // Every network request is bounded while its body is being received.
@@ -439,18 +333,6 @@ Item {
         + " | /usr/bin/head -c \"$4\"",
       "skybrief-request",
       String(processTimeoutSec), String(requestTimeoutSec), String(url), String(maxResponseBytes)]
-  }
-
-  // The same pipeline for the requests that carry their configuration on stdin
-  // (autorouter's OAuth token and NOTAM queries), where the credentials must
-  // not appear in argv. `-K -` reads that config, and the child's stdin is
-  // still forwarded through the shell untouched.
-  function stdinRequestCommand() {
-    return ["/usr/bin/bash", "-o", "pipefail", "-c",
-      "/usr/bin/timeout \"$1\" /usr/bin/curl -fsS --fail-with-body --max-time \"$2\" -K -"
-        + " | /usr/bin/head -c \"$3\"",
-      "skybrief-request",
-      String(processTimeoutSec), String(requestTimeoutSec), String(maxResponseBytes)]
   }
 
   // A body that hit the cap is not a network failure and must read as its own
@@ -624,143 +506,6 @@ Item {
   function historyFor(code) {
     var list = histories[String(code || "").toUpperCase()]
     return Array.isArray(list) ? list : []
-  }
-
-  // ---- autorouter --------------------------------------------------------
-
-  property bool notamPending: false
-  // Kept separate from `lastError`: a NOTAM failure must not blank the weather
-  // card, and the NOTAM section must not claim "none in force" when the query
-  // never succeeded.
-  property string notamError: ""
-
-  function refreshNotams() {
-    var codes = []
-    if (favouriteStation !== "") codes.push(favouriteStation)
-    if (configuredFir !== "") codes.push(configuredFir)
-    if (codes.length === 0) return
-
-    var now = Date.now()
-    if (Autorouter.tokenIsUsable(tokenState, now)) {
-      requestNotamRows(tokenState.token)
-      return
-    }
-
-    tokenProc.generation = generation
-    tokenProc.payload = Autorouter.tokenRequestConfig(credential.user, credential.password)
-    tokenProc.running = true
-  }
-
-  function requestNotamRows(token) {
-    var codes = []
-    if (favouriteStation !== "") codes.push(favouriteStation)
-    if (configuredFir !== "") codes.push(configuredFir)
-    notamProc.generation = generation
-    notamProc.requestedIcao = favouriteStation
-    notamProc.requestedFir = configuredFir
-    notamProc.payload = Autorouter.notamRequestConfig(token, codes, notamLimit)
-    notamProc.running = true
-    notamPending = true
-  }
-
-  Process {
-    id: tokenProc
-    property string payload: ""
-    property int generation: 0
-    property bool reported: false
-    // --fail-with-body, not plain --fail: autorouter answers an invalid client
-    // with HTTP 403 and a JSON body naming the reason. Plain --fail would throw
-    // that body away and leave the user with "exit 22", which says nothing.
-    // The body still goes through the bounded pipeline, so the reason is
-    // readable but cannot grow without limit.
-    command: root.stdinRequestCommand()
-    clearEnvironment: true
-    stdinEnabled: true
-    running: false
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (tokenProc.generation !== root.generation) return
-        var parsed = Autorouter.parseTokenResponse(text)
-        if (parsed.error || !parsed.token) {
-          tokenProc.reported = true
-          root.notamError = "autorouter sign-in failed — " + String(parsed.error || "no token")
-          root.notamPending = false
-          return
-        }
-        root.notamError = ""
-        var expiresIn = parsed.expiresInSec === null ? 3600 : parsed.expiresInSec
-        root.tokenState = { token: parsed.token, expiresAtMs: Date.now() + expiresIn * 1000 }
-        root.requestNotamRows(parsed.token)
-      }
-    }
-    onStarted: {
-      tokenProc.reported = false
-      tokenProc.write(tokenProc.payload)
-      tokenProc.stdinEnabled = false
-    }
-    onExited: function(code) {
-      tokenProc.stdinEnabled = true
-      if (tokenProc.generation !== root.generation) return
-      if (tokenProc.reported) return
-      if (code === 0) return
-      root.notamPending = false
-      root.notamError = root.isOverflowExit(code)
-        ? root.overflowMessage("autorouter sign-in")
-        : "autorouter is unreachable (curl exit " + code + ")"
-    }
-  }
-
-  Process {
-    id: notamProc
-    property string payload: ""
-    property int generation: 0
-    property string requestedIcao: ""
-    property string requestedFir: ""
-    property bool reported: false
-    command: root.stdinRequestCommand()
-    clearEnvironment: true
-    stdinEnabled: true
-    running: false
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (notamProc.generation !== root.generation) return
-        root.notamPending = false
-        var parsed = Autorouter.parseNotamResponse(text)
-        if (parsed.error) {
-          notamProc.reported = true
-          root.notamError = "NOTAM query rejected — " + parsed.error
-          return
-        }
-        var rows = []
-        for (var i = 0; i < parsed.rows.length; i++) {
-          var row = Autorouter.formatNotamRow(parsed.rows[i], root.timeFormat)
-          if (row) rows.push(row)
-        }
-        rows = Autorouter.sortNotamRows(rows, Date.now())
-        root.notams = Autorouter.filterNotamRows(rows, {
-          icao: notamProc.requestedIcao,
-          fir: notamProc.requestedFir
-        })
-        root.notamError = ""
-      }
-    }
-    onStarted: {
-      notamProc.reported = false
-      notamProc.write(notamProc.payload)
-      notamProc.stdinEnabled = false
-    }
-    onExited: function(code) {
-      notamProc.stdinEnabled = true
-      if (notamProc.generation !== root.generation) return
-      if (notamProc.reported) return
-      if (code === 0) return
-      root.notamPending = false
-      root.notamError = root.isOverflowExit(code)
-        ? root.overflowMessage("NOTAM query")
-        : "NOTAM query failed (curl exit " + code + ")"
-    }
   }
 
   // ---- network children --------------------------------------------------

@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "id": "io.github.tecknozic.skybrief",
   "name": "SkyBrief",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "author": "tecknozic",
   "license": "MIT",
-  "description": "Aviation weather for the Omarchy bar: METAR, TAF and flight category at a glance, decoded or raw, with optional NOTAMs through an autorouter account.",
+  "description": "Aviation weather for the Omarchy bar: METAR, TAF and flight category at a glance, decoded or raw.",
   "kinds": ["bar-widget", "service"],
   "entryPoints": { "barWidget": "BarWidget.qml", "service": "Service.qml" },
   "barWidget": {
     "displayName": "SkyBrief",
-    "description": "Flight category pill with METAR, TAF and NOTAM details",
+    "description": "Flight category pill with METAR, TAF and SIGMET details",
     "category": "Info",
     "allowMultiple": false,
     "defaultSection": "right",
@@ -24,23 +24,19 @@
       "refreshMinutes": 10,
       "maxAgeMinutes": 75,
       "historyCount": 3,
-      "alertCategory": "off",
-      "notamSource": "off",
-      "notamLimit": 40
+      "alertCategory": "off"
     },
     "schema": [
       { "key": "station", "type": "string", "label": "Favourite station", "description": "ICAO code. Empty picks the nearest reporting field from the Omarchy weather location.", "defaultValue": "" },
       { "key": "quickStations", "type": "string", "label": "Quick list", "description": "Comma-separated ICAO codes offered in the panel. Ten at most; extra codes are ignored.", "defaultValue": "" },
-      { "key": "fir", "type": "string", "label": "Favourite FIR", "description": "FIR identifier (e.g. LFFF) whose NOTAMs are shown alongside the aerodrome's.", "defaultValue": "" },
+      { "key": "fir", "type": "string", "label": "Favourite FIR", "description": "FIR identifier (e.g. LFFF) whose SIGMETs are shown alongside the aerodrome's.", "defaultValue": "" },
       { "key": "showRaw", "type": "boolean", "label": "Show raw reports by default", "defaultValue": true },
       { "key": "units", "type": "enum", "label": "Units", "options": ["metric", "imperial"], "defaultValue": "metric", "description": "Applies to temperature, visibility and altimeter only. Wind stays in knots, cloud base in feet." },
       { "key": "timeFormat", "type": "enum", "label": "Times", "options": ["utc", "local"], "defaultValue": "utc" },
       { "key": "refreshMinutes", "type": "integer", "label": "Refresh interval (minutes)", "min": 2, "max": 120, "step": 1, "defaultValue": 10 },
       { "key": "maxAgeMinutes", "type": "integer", "label": "Stale after (minutes)", "min": 15, "max": 360, "step": 5, "defaultValue": 75 },
       { "key": "historyCount", "type": "integer", "label": "Earlier observations kept", "description": "How many past observations the trend unfolds. 0 hides the trend entirely.", "min": 0, "max": 6, "step": 1, "defaultValue": 3 },
-      { "key": "alertCategory", "type": "enum", "label": "Notify when it drops to", "options": ["off", "MVFR", "IFR", "LIFR"], "defaultValue": "off" },
-      { "key": "notamSource", "type": "enum", "label": "NOTAM source", "options": ["off", "autorouter"], "defaultValue": "off", "description": "autorouter requires an account with API access and credentials saved from the detail view." },
-      { "key": "notamLimit", "type": "integer", "label": "NOTAMs per query", "min": 5, "max": 100, "step": 5, "defaultValue": 40 }
+      { "key": "alertCategory", "type": "enum", "label": "Notify when it drops to", "options": ["off", "MVFR", "IFR", "LIFR"], "defaultValue": "off" }
     ]
   }
 }

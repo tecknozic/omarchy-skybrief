@@ -348,16 +348,57 @@ Panel {
             width: parent.width
             title: root.heroTitle
             meta: root.heroMeta
-            detail: root.category
+            // The category pill is not the hero's `detail`: that one is pinned
+            // to the trailing edge of the title row, and the category belongs
+            // under the symbol it qualifies, at the head of the card.
+            detail: ""
             foreground: root.foreground
             fontFamily: root.fontFamily
             iconComponent: Component {
-              Text {
-                text: root.status === "offline" || root.status === "error" ? "󰅖"
-                  : (root.status === "unknown-station" ? "󰋼" : "󰖐")
-                color: root.category !== "" ? root.categoryColor : root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.display
+              // A plain Item rather than a Column: a Column refuses horizontal
+              // anchors on its children, and both of these are centred.
+              Item {
+                implicitWidth: Math.max(symbol.implicitWidth, categoryPill.implicitWidth)
+                implicitHeight: symbol.implicitHeight
+                  + (categoryPill.visible ? Style.space(4) + categoryPill.implicitHeight : 0)
+
+                Text {
+                  id: symbol
+                  anchors.top: parent.top
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: root.status === "offline" || root.status === "error" ? "󰅖"
+                    : (root.status === "unknown-station" ? "󰋼" : "󰖐")
+                  color: root.category !== "" ? root.categoryColor : root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.display
+                }
+
+                // Hidden outright when there is no category, so the states that
+                // are not one — no observation, offline — keep the bare glyph
+                // instead of an empty lozenge under it.
+                BorderSurface {
+                  id: categoryPill
+                  visible: root.category !== ""
+                  anchors.top: symbol.bottom
+                  anchors.topMargin: Style.space(4)
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  implicitWidth: categoryText.implicitWidth + Style.space(10)
+                  implicitHeight: categoryText.implicitHeight + Style.space(4)
+                  color: "transparent"
+                  borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+                  radius: Style.cornerRadius
+
+                  Text {
+                    id: categoryText
+                    textFormat: Text.PlainText
+                    anchors.centerIn: parent
+                    text: root.category
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                  }
+                }
               }
             }
             // The refresh lives on the header, right after the category pill:
